@@ -71,11 +71,17 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 	adaptor.Init(info)
 	var requestBody io.Reader
+	channelID := common.GetContextKeyInt(c, appconstant.ContextKeyChannelId)
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
+		bodyBytes, err := storage.Bytes()
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+		}
+		service.WriteCodexOutgoingBodyProbe(c, channelID, request.Model, bodyBytes, "upstream_final_passthrough")
 		requestBody = common.ReaderOnly(storage)
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
@@ -105,6 +111,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if common.DebugEnabled {
 			println("requestBody: ", string(jsonData))
 		}
+		service.WriteCodexOutgoingBodyProbe(c, channelID, request.Model, jsonData, "upstream_final_converted")
 		requestBody = bytes.NewBuffer(jsonData)
 	}
 

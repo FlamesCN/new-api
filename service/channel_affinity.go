@@ -3,7 +3,10 @@ package service
 import (
 	"fmt"
 	"hash/fnv"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,9 +28,15 @@ const (
 	ginKeyChannelAffinityMeta       = "channel_affinity_meta"
 	ginKeyChannelAffinityLogInfo    = "channel_affinity_log_info"
 	ginKeyChannelAffinitySkipRetry  = "channel_affinity_skip_retry_on_failure"
+	ginKeyCodexHeaderProbeLogged    = "codex_header_probe_logged"
+	ginKeyCodexRawBodyProbeLogged   = "codex_raw_body_probe_logged"
+	ginKeyCodexOutgoingProbeLogged  = "codex_outgoing_body_probe_logged"
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
+	codexRawBodyProbePath                   = "/home/Flames/new-api/logs/codex-body-probe.jsonl"
+	codexUpstreamBodyProbePath              = "/home/Flames/new-api/logs/codex-body-probe-upstream.jsonl"
+	codexRawBodyProbeChannelID              = 2
 )
 
 var (
@@ -38,6 +47,7 @@ var (
 	channelAffinityUsageCacheStatsCache *cachex.HybridCache[ChannelAffinityUsageCacheCounters]
 
 	channelAffinityRegexCache sync.Map // map[string]*regexp.Regexp
+	codexRawBodyProbeMu       sync.Mutex
 )
 
 type channelAffinityMeta struct {
@@ -416,6 +426,74 @@ func buildChannelAffinityKeyHint(s string) string {
 	return s[:4] + "..." + s[len(s)-4:]
 }
 
+func buildCodexBodyProbeFromBytes(body []byte) (int, string, []string) {
+	bodySize := len(body)
+	bodyHash := affinityFingerprint(string(body))
+	if bodySize == 0 {
+		return bodySize, bodyHash, nil
+	}
+
+	parsed := gjson.ParseBytes(body)
+	if !parsed.IsObject() {
+		return bodySize, bodyHash, nil
+	}
+
+	bodyKeys := make([]string, 0, 16)
+	parsed.ForEach(func(key, value gjson.Result) bool {
+		if key.Str != "" {
+			bodyKeys = append(bodyKeys, key.Str)
+		}
+		return true
+	})
+	sort.Strings(bodyKeys)
+	return bodySize, bodyHash, bodyKeys
+}
+
+func buildCodexBodyProbe(c *gin.Context) (int, string, []string) {
+	if c == nil {
+		return 0, "", nil
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return 0, "", nil
+	}
+	body, err := storage.Bytes()
+	if err != nil {
+		return 0, "", nil
+	}
+	return buildCodexBodyProbeFromBytes(body)
+}
+
+func buildCodexProbeHeaderSnapshot(c *gin.Context) ([]string, map[string]interface{}) {
+	headerNames := make([]string, 0)
+	if c != nil && c.Request != nil {
+		headerNames = make([]string, 0, len(c.Request.Header))
+		for name := range c.Request.Header {
+			headerNames = append(headerNames, name)
+		}
+		sort.Strings(headerNames)
+	}
+	headerInfo := map[string]interface{}{
+		"received_headers":      headerNames,
+		"originator":            "",
+		"session_id":            "",
+		"user_agent":            "",
+		"x_client_request_id":   "",
+		"x_codex_turn_metadata": "",
+		"x_codex_beta_features": "",
+	}
+	if c == nil || c.Request == nil {
+		return headerNames, headerInfo
+	}
+	headerInfo["originator"] = strings.TrimSpace(c.Request.Header.Get("Originator"))
+	headerInfo["session_id"] = strings.TrimSpace(c.Request.Header.Get("Session_id"))
+	headerInfo["user_agent"] = strings.TrimSpace(c.Request.Header.Get("User-Agent"))
+	headerInfo["x_client_request_id"] = strings.TrimSpace(c.Request.Header.Get("X-Client-Request-Id"))
+	headerInfo["x_codex_turn_metadata"] = strings.TrimSpace(c.Request.Header.Get("X-Codex-Turn-Metadata"))
+	headerInfo["x_codex_beta_features"] = strings.TrimSpace(c.Request.Header.Get("X-Codex-Beta-Features"))
+	return headerNames, headerInfo
+}
+
 func cloneStringAnyMap(src map[string]interface{}) map[string]interface{} {
 	if len(src) == 0 {
 		return map[string]interface{}{}
@@ -529,6 +607,156 @@ func ApplyChannelAffinityOverrideTemplate(c *gin.Context, paramOverride map[stri
 	return mergedParam, true
 }
 
+func logCodexHeaderProbe(c *gin.Context, modelName string, path string, affinityValue string) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	if path != "/v1/responses" || !strings.HasPrefix(modelName, "gpt-") {
+		return
+	}
+	if _, exists := c.Get(ginKeyCodexHeaderProbeLogged); exists {
+		return
+	}
+	c.Set(ginKeyCodexHeaderProbeLogged, true)
+
+	headerLen := func(name string) int {
+		return len(strings.TrimSpace(c.Request.Header.Get(name)))
+	}
+
+	originatorLen := headerLen("Originator")
+	sessionIDLen := headerLen("Session_id")
+	userAgentLen := headerLen("User-Agent")
+	codexBetaFeaturesLen := headerLen("X-Codex-Beta-Features")
+	codexTurnMetadataLen := headerLen("X-Codex-Turn-Metadata")
+	headerNames := make([]string, 0, len(c.Request.Header))
+	for name := range c.Request.Header {
+		headerNames = append(headerNames, name)
+	}
+	sort.Strings(headerNames)
+	bodySize, bodyHash, bodyKeys := buildCodexBodyProbe(c)
+
+	common.SysLog(fmt.Sprintf(
+		"%s | codex header probe: model=%s path=%s prompt_cache_key=%t originator=%t/%d session_id=%t/%d user_agent=%t/%d x_codex_beta_features=%t/%d x_codex_turn_metadata=%t/%d received_headers=%v body_bytes=%d body_hash=%s body_keys=%v",
+		c.GetString(common.RequestIdKey),
+		modelName,
+		path,
+		strings.TrimSpace(affinityValue) != "",
+		originatorLen > 0,
+		originatorLen,
+		sessionIDLen > 0,
+		sessionIDLen,
+		userAgentLen > 0,
+		userAgentLen,
+		codexBetaFeaturesLen > 0,
+		codexBetaFeaturesLen,
+		codexTurnMetadataLen > 0,
+		codexTurnMetadataLen,
+		headerNames,
+		bodySize,
+		bodyHash,
+		bodyKeys,
+	))
+}
+
+func writeCodexBodyProbeRecord(probePath string, contextKey string, c *gin.Context, channelID int, modelName string, body []byte, bodySource string) {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return
+	}
+	if channelID != codexRawBodyProbeChannelID {
+		return
+	}
+	if c.Request.Method != "POST" || c.Request.URL.Path != "/v1/responses" || !strings.HasPrefix(modelName, "gpt-") {
+		return
+	}
+	if _, exists := c.Get(contextKey); exists {
+		return
+	}
+	c.Set(contextKey, true)
+
+	bodySize, bodyHash, bodyKeys := buildCodexBodyProbeFromBytes(body)
+	_, headerInfo := buildCodexProbeHeaderSnapshot(c)
+
+	record := map[string]interface{}{
+		"logged_at":             time.Now().Format(time.RFC3339Nano),
+		"request_id":            c.GetString(common.RequestIdKey),
+		"channel_id":            channelID,
+		"method":                c.Request.Method,
+		"path":                  c.Request.URL.Path,
+		"model":                 modelName,
+		"body":                  string(body),
+		"body_bytes":            bodySize,
+		"body_hash":             bodyHash,
+		"body_keys":             bodyKeys,
+		"received_headers":      headerInfo["received_headers"],
+		"originator":            headerInfo["originator"],
+		"session_id":            headerInfo["session_id"],
+		"user_agent":            headerInfo["user_agent"],
+		"x_client_request_id":   headerInfo["x_client_request_id"],
+		"x_codex_turn_metadata": headerInfo["x_codex_turn_metadata"],
+		"x_codex_beta_features": headerInfo["x_codex_beta_features"],
+		"body_source":           bodySource,
+	}
+	payload, err := common.Marshal(record)
+	if err != nil {
+		common.SysError(fmt.Sprintf("%s | codex body probe: marshal failed: source=%s err=%v", c.GetString(common.RequestIdKey), bodySource, err))
+		return
+	}
+
+	codexRawBodyProbeMu.Lock()
+	defer codexRawBodyProbeMu.Unlock()
+
+	if err := os.MkdirAll(filepath.Dir(probePath), 0o755); err != nil {
+		common.SysError(fmt.Sprintf("%s | codex body probe: mkdir failed: source=%s path=%s err=%v", c.GetString(common.RequestIdKey), bodySource, probePath, err))
+		return
+	}
+	f, err := os.OpenFile(probePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		common.SysError(fmt.Sprintf("%s | codex body probe: open file failed: source=%s path=%s err=%v", c.GetString(common.RequestIdKey), bodySource, probePath, err))
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.Write(append(payload, '\n')); err != nil {
+		common.SysError(fmt.Sprintf("%s | codex body probe: write failed: source=%s path=%s err=%v", c.GetString(common.RequestIdKey), bodySource, probePath, err))
+		return
+	}
+
+	common.SysLog(fmt.Sprintf(
+		"%s | codex body probe written: source=%s channel_id=%d path=%s file=%s body_bytes=%d body_hash=%s",
+		c.GetString(common.RequestIdKey),
+		bodySource,
+		channelID,
+		c.Request.URL.Path,
+		probePath,
+		bodySize,
+		bodyHash,
+	))
+}
+
+func WriteCodexRawBodyProbe(c *gin.Context, channelID int, modelName string) {
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		common.SysError(fmt.Sprintf("%s | codex raw body probe: get body storage failed: err=%v", c.GetString(common.RequestIdKey), err))
+		return
+	}
+	body, err := storage.Bytes()
+	if err != nil {
+		common.SysError(fmt.Sprintf("%s | codex raw body probe: read body failed: err=%v", c.GetString(common.RequestIdKey), err))
+		return
+	}
+	writeCodexBodyProbeRecord(codexRawBodyProbePath, ginKeyCodexRawBodyProbeLogged, c, channelID, modelName, body, "ingress_raw")
+}
+
+func WriteCodexOutgoingBodyProbe(c *gin.Context, channelID int, modelName string, body []byte, bodySource string) {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return
+	}
+	if bodySource == "" {
+		bodySource = "upstream_final"
+	}
+	writeCodexBodyProbeRecord(codexUpstreamBodyProbePath, ginKeyCodexOutgoingProbeLogged, c, channelID, modelName, body, bodySource)
+}
+
 func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup string) (int, bool) {
 	setting := operation_setting.GetChannelAffinitySetting()
 	if setting == nil || !setting.Enabled {
@@ -561,6 +789,9 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 				usedSource = src
 				break
 			}
+		}
+		if strings.TrimSpace(rule.Name) == "codex cli trace" {
+			logCodexHeaderProbe(c, modelName, path, affinityValue)
 		}
 		if affinityValue == "" {
 			continue
