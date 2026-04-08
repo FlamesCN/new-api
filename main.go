@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -188,11 +189,13 @@ func main() {
 	if port == "" {
 		port = strconv.Itoa(*common.Port)
 	}
+	listenAddress := strings.TrimSpace(*common.Listen)
+	listenTarget := net.JoinHostPort(listenAddress, port)
 
 	// Log startup success message
 	common.LogStartupSuccess(startTime, port)
 
-	err = server.Run(":" + port)
+	err = server.Run(listenTarget)
 	if err != nil {
 		common.FatalLog("failed to start HTTP server: " + err.Error())
 	}

@@ -16,6 +16,7 @@ import (
 
 var (
 	Port         = flag.Int("port", 3000, "the listening port")
+	Listen       = flag.String("listen", "", "the listening address, default from BIND_ADDRESS or 0.0.0.0")
 	PrintVersion = flag.Bool("version", false, "print version and exit")
 	PrintHelp    = flag.Bool("help", false, "print help and exit")
 	LogDir       = flag.String("log-dir", "./logs", "specify the log directory")
@@ -25,7 +26,7 @@ func printHelp() {
 	fmt.Println("NewAPI(Based OneAPI) " + Version + " - The next-generation LLM gateway and AI asset management system supports multiple languages.")
 	fmt.Println("Original Project: OneAPI by JustSong - https://github.com/songquanpeng/one-api")
 	fmt.Println("Maintainer: QuantumNous - https://github.com/QuantumNous/new-api")
-	fmt.Println("Usage: newapi [--port <port>] [--log-dir <log directory>] [--version] [--help]")
+	fmt.Println("Usage: newapi [--port <port>] [--listen <address>] [--log-dir <log directory>] [--version] [--help]")
 }
 
 func InitEnv() {
@@ -44,6 +45,13 @@ func InitEnv() {
 	if *PrintHelp {
 		printHelp()
 		os.Exit(0)
+	}
+
+	if *Listen == "" {
+		*Listen = strings.TrimSpace(os.Getenv("BIND_ADDRESS"))
+	}
+	if *Listen == "" {
+		*Listen = "0.0.0.0"
 	}
 
 	if os.Getenv("SESSION_SECRET") != "" {
