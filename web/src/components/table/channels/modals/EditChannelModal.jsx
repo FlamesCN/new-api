@@ -275,6 +275,7 @@ const EditChannelModal = (props) => {
   const [isModalOpenurl, setIsModalOpenurl] = useState(false);
   const [modelModalVisible, setModelModalVisible] = useState(false);
   const [fetchedModels, setFetchedModels] = useState([]);
+  const [fetchedChatGPTModels, setFetchedChatGPTModels] = useState([]);
   const [modelMappingValueModalVisible, setModelMappingValueModalVisible] =
     useState(false);
   const [modelMappingValueModalModels, setModelMappingValueModalModels] =
@@ -1105,6 +1106,11 @@ const EditChannelModal = (props) => {
       });
       if (res && res.data && res.data.success) {
         models.push(...res.data.data);
+        setFetchedChatGPTModels(
+          Array.isArray(res.data.meta?.chatgpt_models)
+            ? res.data.meta.chatgpt_models
+            : [],
+        );
         if (
           !silent &&
           inputs.type === 57 &&
@@ -1146,6 +1152,11 @@ const EditChannelModal = (props) => {
 
           if (res && res.data && res.data.success) {
             models.push(...res.data.data);
+            setFetchedChatGPTModels(
+              Array.isArray(res.data.meta?.chatgpt_models)
+                ? res.data.meta.chatgpt_models
+                : [],
+            );
             if (
               !silent &&
               inputs.type === 57 &&
@@ -1166,10 +1177,12 @@ const EditChannelModal = (props) => {
               );
             }
           } else {
+            setFetchedChatGPTModels([]);
             err = true;
           }
         } catch (error) {
           console.error('Error fetching models:', error);
+          setFetchedChatGPTModels([]);
           err = true;
         }
       }
@@ -1184,6 +1197,7 @@ const EditChannelModal = (props) => {
       setLoading(false);
       return uniqueModels;
     } else {
+      setFetchedChatGPTModels([]);
       showError(t('获取模型列表失败'));
     }
     setLoading(false);
@@ -4288,6 +4302,11 @@ const EditChannelModal = (props) => {
       <ModelSelectModal
         visible={modelModalVisible}
         models={fetchedModels}
+        secondaryModels={inputs.type === 57 ? fetchedChatGPTModels : []}
+        primaryTitle={
+          inputs.type === 57 ? t('Codex 兼容模型') : t('获取到的模型')
+        }
+        secondaryTitle={t('ChatGPT 可见模型')}
         selected={inputs.models}
         redirectModels={redirectModelList}
         onConfirm={(selectedModels) => {
