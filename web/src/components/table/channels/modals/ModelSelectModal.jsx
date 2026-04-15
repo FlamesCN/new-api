@@ -41,6 +41,9 @@ import { getModelCategories } from '../../../../helpers/render';
 const ModelSelectModal = ({
   visible,
   models = [],
+  secondaryModels = [],
+  primaryTitle = '',
+  secondaryTitle = '',
   selected = [],
   redirectModels = [],
   onConfirm,
@@ -59,9 +62,33 @@ const ModelSelectModal = ({
     () => (selected || []).map(getModelName),
     [selected],
   );
+  const normalizedPrimaryModels = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (models || [])
+            .map((model) => String(model ?? '').trim())
+            .filter(Boolean),
+        ),
+      ),
+    [models],
+  );
+  const normalizedSecondaryModels = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (secondaryModels || [])
+            .map((model) => String(model ?? '').trim())
+            .filter(Boolean),
+        ),
+      ),
+    [secondaryModels],
+  );
+  const hasSecondaryPanel = normalizedSecondaryModels.length > 0;
 
   const [checkedList, setCheckedList] = useState(normalizedSelected);
   const [keyword, setKeyword] = useState('');
+  const [secondaryKeyword, setSecondaryKeyword] = useState('');
   const [activeTab, setActiveTab] = useState('new');
 
   const isMobile = useIsMobile();
@@ -103,10 +130,15 @@ const ModelSelectModal = ({
     return set;
   }, [normalizedRedirectModels, normalizedSelectedSet]);
 
-  const filteredModels = models.filter((m) =>
+  const filteredModels = normalizedPrimaryModels.filter((m) =>
     String(m || '')
       .toLowerCase()
       .includes(keyword.toLowerCase()),
+  );
+  const filteredSecondaryModels = normalizedSecondaryModels.filter((m) =>
+    String(m || '')
+      .toLowerCase()
+      .includes(secondaryKeyword.toLowerCase()),
   );
 
   // 分类模型：新获取的模型和已有模型
@@ -121,6 +153,8 @@ const ModelSelectModal = ({
   useEffect(() => {
     if (visible) {
       setCheckedList(normalizedSelected);
+      setKeyword('');
+      setSecondaryKeyword('');
     }
   }, [visible, normalizedSelected]);
 
@@ -178,6 +212,11 @@ const ModelSelectModal = ({
 
   const newModelsByCategory = categorizeModels(newModels);
   const existingModelsByCategory = categorizeModels(existingModels);
+  const secondaryModelsByCategory = categorizeModels(filteredSecondaryModels);
+  const primaryModelSet = useMemo(
+    () => new Set(normalizedPrimaryModels),
+    [normalizedPrimaryModels],
+  );
 
   // Tab列表配置
   const tabList = [
@@ -307,6 +346,53 @@ const ModelSelectModal = ({
     );
   };
 
+  const renderReadonlyModelsByCategory = (modelsByCategory, categoryKeyPrefix) => {
+    const categoryEntries = Object.entries(modelsByCategory);
+    if (categoryEntries.length === 0) return null;
+
+    return (
+      <Collapse
+        key={`${categoryKeyPrefix}_${categoryEntries.length}`}
+        defaultActiveKey={[]}
+      >
+        {categoryEntries.map(([key, categoryData], index) => (
+          <Collapse.Panel
+            key={`${categoryKeyPrefix}_${index}`}
+            itemKey={`${categoryKeyPrefix}_${index}`}
+            header={`${categoryData.label} (${categoryData.models.length})`}
+          >
+            <div className='flex items-center gap-2 mb-3'>
+              {categoryData.icon}
+              <Typography.Text type='secondary' size='small'>
+                {t('显示 {{count}} 个模型', {
+                  count: categoryData.models.length,
+                })}
+              </Typography.Text>
+            </div>
+            <div className='grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2'>
+              {categoryData.models.map((model) => {
+                const existsInPrimary = primaryModelSet.has(model);
+                return (
+                  <div
+                    key={model}
+                    className='flex items-center justify-between gap-3 rounded-lg px-3 py-2 border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)]'
+                  >
+                    <Typography.Text ellipsis={{ showTooltip: true }}>
+                      {model}
+                    </Typography.Text>
+                    <Typography.Text type={existsInPrimary ? 'success' : 'tertiary'} size='small'>
+                      {existsInPrimary ? t('已在 Codex 列表') : t('仅 ChatGPT 可见')}
+                    </Typography.Text>
+                  </div>
+                );
+              })}
+            </div>
+          </Collapse.Panel>
+        ))}
+      </Collapse>
+    );
+  };
+
   return (
     <Modal
       header={
@@ -335,83 +421,139 @@ const ModelSelectModal = ({
       maskClosable
       centered
     >
-      <Input
-        prefix={<IconSearch size={14} />}
-        placeholder={t('搜索模型')}
-        value={keyword}
-        onChange={(v) => setKeyword(v)}
-        showClear
-      />
-
-      <Spin spinning={!models || models.length === 0}>
-        <div style={{ maxHeight: 400, overflowY: 'auto', paddingRight: 8 }}>
-          {filteredModels.length === 0 ? (
-            <Empty
-              image={
-                <IllustrationNoResult style={{ width: 150, height: 150 }} />
-              }
-              darkModeImage={
-                <IllustrationNoResultDark style={{ width: 150, height: 150 }} />
-              }
-              description={t('暂无匹配模型')}
-              style={{ padding: 30 }}
-            />
-          ) : (
-            <Checkbox.Group
-              value={checkedList}
-              onChange={(vals) => setCheckedList(vals)}
-            >
-              {activeTab === 'new' && newModels.length > 0 && (
-                <div>{renderModelsByCategory(newModelsByCategory, 'new')}</div>
-              )}
-              {activeTab === 'existing' && existingModels.length > 0 && (
-                <div>
-                  {renderModelsByCategory(existingModelsByCategory, 'existing')}
-                </div>
-              )}
-            </Checkbox.Group>
-          )}
-        </div>
-      </Spin>
-
-      <Typography.Text
-        type='secondary'
-        size='small'
-        className='block text-right mt-4'
+      <div
+        className={`grid gap-4 ${hasSecondaryPanel && !isMobile ? 'grid-cols-2' : 'grid-cols-1'}`}
       >
-        <div className='flex items-center justify-end gap-2'>
-          {(() => {
-            const currentModels =
-              activeTab === 'new' ? newModels : existingModels;
-            const currentSelected = currentModels.filter((model) =>
-              checkedList.includes(model),
-            ).length;
-            const isAllSelected =
-              currentModels.length > 0 &&
-              currentSelected === currentModels.length;
-            const isIndeterminate =
-              currentSelected > 0 && currentSelected < currentModels.length;
+        <div className='min-w-0'>
+          <div className='flex items-center justify-between gap-2 mb-2'>
+            <Typography.Text strong>
+              {primaryTitle || t('可选模型')}
+            </Typography.Text>
+            <Typography.Text type='tertiary' size='small'>
+              {t('共 {{count}} 个', { count: normalizedPrimaryModels.length })}
+            </Typography.Text>
+          </div>
+          <Input
+            prefix={<IconSearch size={14} />}
+            placeholder={t('搜索模型')}
+            value={keyword}
+            onChange={(v) => setKeyword(v)}
+            showClear
+          />
 
-            return (
-              <>
-                <span>
-                  {t('已选择 {{selected}} / {{total}}', {
-                    selected: currentSelected,
-                    total: currentModels.length,
-                  })}
-                </span>
-                <Checkbox
-                  checked={isAllSelected}
-                  indeterminate={isIndeterminate}
-                  onChange={(e) => {
-                    handleCategorySelectAll(currentModels, e.target.checked);
-                  }}
+          <Spin spinning={!normalizedPrimaryModels || normalizedPrimaryModels.length === 0}>
+            <div style={{ maxHeight: 400, overflowY: 'auto', paddingRight: 8 }}>
+              {filteredModels.length === 0 ? (
+                <Empty
+                  image={
+                    <IllustrationNoResult style={{ width: 150, height: 150 }} />
+                  }
+                  darkModeImage={
+                    <IllustrationNoResultDark style={{ width: 150, height: 150 }} />
+                  }
+                  description={t('暂无匹配模型')}
+                  style={{ padding: 30 }}
                 />
-              </>
-            );
-          })()}
+              ) : (
+                <Checkbox.Group
+                  value={checkedList}
+                  onChange={(vals) => setCheckedList(vals)}
+                >
+                  {activeTab === 'new' && newModels.length > 0 && (
+                    <div>{renderModelsByCategory(newModelsByCategory, 'new')}</div>
+                  )}
+                  {activeTab === 'existing' && existingModels.length > 0 && (
+                    <div>
+                      {renderModelsByCategory(existingModelsByCategory, 'existing')}
+                    </div>
+                  )}
+                </Checkbox.Group>
+              )}
+            </div>
+          </Spin>
+
+          <Typography.Text
+            type='secondary'
+            size='small'
+            className='block text-right mt-4'
+          >
+            <div className='flex items-center justify-end gap-2'>
+              {(() => {
+                const currentModels =
+                  activeTab === 'new' ? newModels : existingModels;
+                const currentSelected = currentModels.filter((model) =>
+                  checkedList.includes(model),
+                ).length;
+                const isAllSelected =
+                  currentModels.length > 0 &&
+                  currentSelected === currentModels.length;
+                const isIndeterminate =
+                  currentSelected > 0 && currentSelected < currentModels.length;
+
+                return (
+                  <>
+                    <span>
+                      {t('已选择 {{selected}} / {{total}}', {
+                        selected: currentSelected,
+                        total: currentModels.length,
+                      })}
+                    </span>
+                    <Checkbox
+                      checked={isAllSelected}
+                      indeterminate={isIndeterminate}
+                      onChange={(e) => {
+                        handleCategorySelectAll(currentModels, e.target.checked);
+                      }}
+                    />
+                  </>
+                );
+              })()}
+            </div>
+          </Typography.Text>
         </div>
-      </Typography.Text>
+
+        {hasSecondaryPanel && (
+          <div className='min-w-0'>
+            <div className='flex items-center justify-between gap-2 mb-2'>
+              <Typography.Text strong>
+                {secondaryTitle || t('参考模型')}
+              </Typography.Text>
+              <Typography.Text type='tertiary' size='small'>
+                {t('共 {{count}} 个', {
+                  count: normalizedSecondaryModels.length,
+                })}
+              </Typography.Text>
+            </div>
+            <Input
+              prefix={<IconSearch size={14} />}
+              placeholder={t('搜索模型')}
+              value={secondaryKeyword}
+              onChange={(v) => setSecondaryKeyword(v)}
+              showClear
+            />
+
+            <div style={{ maxHeight: 400, overflowY: 'auto', paddingRight: 8 }}>
+              {filteredSecondaryModels.length === 0 ? (
+                <Empty
+                  image={
+                    <IllustrationNoResult style={{ width: 150, height: 150 }} />
+                  }
+                  darkModeImage={
+                    <IllustrationNoResultDark style={{ width: 150, height: 150 }} />
+                  }
+                  description={t('暂无匹配模型')}
+                  style={{ padding: 30 }}
+                />
+              ) : (
+                renderReadonlyModelsByCategory(
+                  secondaryModelsByCategory,
+                  'secondary',
+                )
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </Modal>
   );
 };
