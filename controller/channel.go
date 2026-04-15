@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
+	codexchannel "github.com/QuantumNous/new-api/relay/channel/codex"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	"github.com/QuantumNous/new-api/service"
@@ -200,6 +201,26 @@ func buildFetchModelsHeaders(channel *model.Channel, key string) (http.Header, e
 	return headers, nil
 }
 
+func fetchCodexModelLists(baseURL string, rawKey string, proxyURL string) (*service.CodexUpstreamModelLists, error) {
+	oauthKey, err := codexchannel.ParseOAuthKey(strings.TrimSpace(rawKey))
+	if err != nil {
+		return nil, err
+	}
+	client, err := service.NewProxyHttpClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return service.FetchCodexUpstreamModelLists(
+		ctx,
+		client,
+		baseURL,
+		oauthKey.AccessToken,
+		oauthKey.AccountID,
+	)
+}
+
 func FetchUpstreamModels(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -210,6 +231,28 @@ func FetchUpstreamModels(c *gin.Context) {
 	channel, err := model.GetChannelById(id, true)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+
+	if channel.Type == constant.ChannelTypeCodex {
+		modelLists, err := fetchCodexModelLists(channel.GetBaseURL(), channel.Key, channel.GetSetting().Proxy)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("获取模型列表失败: %s", err.Error()),
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+			"data":    modelLists.CodexModels,
+			"meta": gin.H{
+				"chatgpt_models":      modelLists.ChatGPTModels,
+				"chatgpt_model_count": len(modelLists.ChatGPTModels),
+				"codex_model_count":   len(modelLists.CodexModels),
+			},
+		})
 		return
 	}
 
@@ -990,9 +1033,11 @@ func FetchModels(c *gin.Context) {
 		baseURL = constant.ChannelBaseURLs[req.Type]
 	}
 
-	// remove line breaks and extra spaces.
 	key := strings.TrimSpace(req.Key)
-	key = strings.Split(key, "\n")[0]
+	if req.Type != constant.ChannelTypeCodex {
+		// remove line breaks and extra spaces for plain text keys.
+		key = strings.Split(key, "\n")[0]
+	}
 
 	if req.Type == constant.ChannelTypeOllama {
 		models, err := ollama.FetchOllamaModels(baseURL, key)
@@ -1029,6 +1074,28 @@ func FetchModels(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"data":    models,
+		})
+		return
+	}
+
+	if req.Type == constant.ChannelTypeCodex {
+		modelLists, err := fetchCodexModelLists(baseURL, key, "")
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": fmt.Sprintf("获取Codex模型失败: %s", err.Error()),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    modelLists.CodexModels,
+			"meta": gin.H{
+				"chatgpt_models":      modelLists.ChatGPTModels,
+				"chatgpt_model_count": len(modelLists.ChatGPTModels),
+				"codex_model_count":   len(modelLists.CodexModels),
+			},
 		})
 		return
 	}
