@@ -115,7 +115,126 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	return normalized
 }
 
+var channelTestRetryableModelErrorKeywords = []string{
+	"model is not supported",
+	"model not supported",
+	"unsupported model",
+	"model_not_found",
+	"does not exist",
+	"unknown model",
+	"not available for your account",
+	"does not have access to the model",
+	"not supported when using codex with a chatgpt account",
+}
+
+func splitChannelTestModelCandidates(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', '\n', '\r', '\t', ';':
+			return true
+		default:
+			return false
+		}
+	})
+	candidates := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if candidate := strings.TrimSpace(part); candidate != "" {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
+}
+
+func appendChannelTestModelCandidates(dst []string, seen map[string]struct{}, raw string) []string {
+	for _, candidate := range splitChannelTestModelCandidates(raw) {
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		dst = append(dst, candidate)
+	}
+	return dst
+}
+
+func resolveChannelTestModels(channel *model.Channel, requestedModel string) []string {
+	seen := make(map[string]struct{})
+	candidates := make([]string, 0, 4)
+
+	if strings.TrimSpace(requestedModel) != "" {
+		candidates = appendChannelTestModelCandidates(candidates, seen, requestedModel)
+		return candidates
+	}
+
+	if channel != nil && channel.TestModel != nil {
+		candidates = appendChannelTestModelCandidates(candidates, seen, *channel.TestModel)
+	}
+	if channel != nil {
+		for _, modelName := range channel.GetModels() {
+			candidates = appendChannelTestModelCandidates(candidates, seen, modelName)
+		}
+	}
+	if len(candidates) == 0 {
+		return []string{"gpt-4o-mini"}
+	}
+	return candidates
+}
+
+func shouldRetryChannelTestWithNextModel(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	if types.IsChannelError(err) || types.IsSkipRetryError(err) {
+		return false
+	}
+	switch err.StatusCode {
+	case http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound:
+	default:
+		return false
+	}
+
+	oaiErr := err.ToOpenAIError()
+	parts := []string{
+		oaiErr.Message,
+		oaiErr.Type,
+		fmt.Sprintf("%v", oaiErr.Code),
+		err.Error(),
+	}
+	for _, part := range parts {
+		lower := strings.ToLower(part)
+		for _, keyword := range channelTestRetryableModelErrorKeywords {
+			if strings.Contains(lower, keyword) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func testChannel(channel *model.Channel, testModel string, endpointType string, streamOverride *bool) testResult {
+	candidates := resolveChannelTestModels(channel, testModel)
+	var lastResult testResult
+	for idx, candidate := range candidates {
+		result := testChannelWithModel(channel, candidate, endpointType, streamOverride)
+		if result.localErr == nil && result.newAPIError == nil {
+			return result
+		}
+		lastResult = result
+		if idx == len(candidates)-1 || !shouldRetryChannelTestWithNextModel(result.newAPIError) {
+			return result
+		}
+		common.SysLog(fmt.Sprintf(
+			"channel test fallback to next model: channel_id=%d name=%s tried_model=%s next_model=%s err=%v",
+			channel.Id,
+			channel.Name,
+			candidate,
+			candidates[idx+1],
+			result.localErr,
+		))
+	}
+	return lastResult
+}
+
+func testChannelWithModel(channel *model.Channel, testModel string, endpointType string, streamOverride *bool) testResult {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -137,17 +256,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 
 	testModel = strings.TrimSpace(testModel)
 	if testModel == "" {
-		if channel.TestModel != nil && *channel.TestModel != "" {
-			testModel = strings.TrimSpace(*channel.TestModel)
-		} else {
-			models := channel.GetModels()
-			if len(models) > 0 {
-				testModel = strings.TrimSpace(models[0])
-			}
-			if testModel == "" {
-				testModel = "gpt-4o-mini"
-			}
-		}
+		testModel = "gpt-4o-mini"
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)

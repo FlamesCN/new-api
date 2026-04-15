@@ -1105,6 +1105,25 @@ const EditChannelModal = (props) => {
       });
       if (res && res.data && res.data.success) {
         models.push(...res.data.data);
+        if (
+          !silent &&
+          inputs.type === 57 &&
+          res.data.meta &&
+          typeof res.data.meta.chatgpt_model_count === 'number'
+        ) {
+          showInfo(
+            t(
+              '已获取 ChatGPT 可见模型 {{chatgpt}} 个，筛出 Codex 兼容模型 {{codex}} 个',
+              {
+                chatgpt: res.data.meta.chatgpt_model_count,
+                codex:
+                  typeof res.data.meta.codex_model_count === 'number'
+                    ? res.data.meta.codex_model_count
+                    : res.data.data.length,
+              },
+            ),
+          );
+        }
       } else {
         err = true;
       }
@@ -1127,6 +1146,25 @@ const EditChannelModal = (props) => {
 
           if (res && res.data && res.data.success) {
             models.push(...res.data.data);
+            if (
+              !silent &&
+              inputs.type === 57 &&
+              res.data.meta &&
+              typeof res.data.meta.chatgpt_model_count === 'number'
+            ) {
+              showInfo(
+                t(
+                  '已获取 ChatGPT 可见模型 {{chatgpt}} 个，筛出 Codex 兼容模型 {{codex}} 个',
+                  {
+                    chatgpt: res.data.meta.chatgpt_model_count,
+                    codex:
+                      typeof res.data.meta.codex_model_count === 'number'
+                        ? res.data.meta.codex_model_count
+                        : res.data.data.length,
+                  },
+                ),
+              );
+            }
           } else {
             err = true;
           }
@@ -4019,10 +4057,15 @@ const EditChannelModal = (props) => {
                       <Form.Input
                         field='test_model'
                         label={t('默认测试模型')}
-                        placeholder={t('不填则为模型列表第一个')}
+                        placeholder={t(
+                          '支持逗号分隔多个候选；不填则按模型列表顺序尝试',
+                        )}
                         onChange={(value) =>
                           handleInputChange('test_model', value)
                         }
+                        extraText={t(
+                          '可填多个测试模型候选，例如：gpt-5.4,gpt-5.1-codex。自动测试遇到“模型不支持/不存在”时会按顺序回退到下一个候选',
+                        )}
                         showClear
                       />
                     </Card>

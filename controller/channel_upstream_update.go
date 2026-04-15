@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	codexchannel "github.com/QuantumNous/new-api/relay/channel/codex"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	"github.com/QuantumNous/new-api/service"
@@ -267,6 +269,34 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 			return nil, err
 		}
 		return normalizeModelNames(models), nil
+	}
+
+	if channel.Type == constant.ChannelTypeCodex {
+		key, _, apiErr := channel.GetNextEnabledKey()
+		if apiErr != nil {
+			return nil, fmt.Errorf("获取渠道密钥失败: %w", apiErr)
+		}
+		oauthKey, err := codexchannel.ParseOAuthKey(strings.TrimSpace(key))
+		if err != nil {
+			return nil, err
+		}
+		client, err := service.NewProxyHttpClient(channel.GetSetting().Proxy)
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		modelLists, err := service.FetchCodexUpstreamModelLists(
+			ctx,
+			client,
+			baseURL,
+			oauthKey.AccessToken,
+			oauthKey.AccountID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeModelNames(modelLists.CodexModels), nil
 	}
 
 	var url string
