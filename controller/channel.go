@@ -250,6 +250,10 @@ func FetchUpstreamModels(c *gin.Context) {
 			"meta": gin.H{
 				"chatgpt_models":      modelLists.ChatGPTModels,
 				"chatgpt_model_count": len(modelLists.ChatGPTModels),
+				"api_models":          modelLists.APIModels,
+				"api_model_count":     len(modelLists.APIModels),
+				"reference_models":    modelLists.ReferenceModels,
+				"reference_label":     modelLists.ReferenceLabel,
 				"codex_model_count":   len(modelLists.CodexModels),
 			},
 		})
@@ -1094,6 +1098,10 @@ func FetchModels(c *gin.Context) {
 			"meta": gin.H{
 				"chatgpt_models":      modelLists.ChatGPTModels,
 				"chatgpt_model_count": len(modelLists.ChatGPTModels),
+				"api_models":          modelLists.APIModels,
+				"api_model_count":     len(modelLists.APIModels),
+				"reference_models":    modelLists.ReferenceModels,
+				"reference_label":     modelLists.ReferenceLabel,
 				"codex_model_count":   len(modelLists.CodexModels),
 			},
 		})

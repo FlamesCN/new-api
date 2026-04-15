@@ -2,18 +2,23 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/samber/lo"
 )
 
 type CodexUpstreamModelLists struct {
-	ChatGPTModels []string `json:"chatgpt_models"`
-	CodexModels   []string `json:"codex_models"`
+	ChatGPTModels   []string `json:"chatgpt_models"`
+	APIModels       []string `json:"api_models"`
+	ReferenceModels []string `json:"reference_models"`
+	ReferenceLabel  string   `json:"reference_label"`
+	CodexModels     []string `json:"codex_models"`
 }
 
 var builtinCodexCompatibleModels = []string{
@@ -39,6 +44,24 @@ func normalizeCodexModelNames(models []string) []string {
 		trimmed := strings.TrimSpace(model)
 		return trimmed, trimmed != ""
 	}))
+}
+
+func buildCodexModelDiscoveryURL(baseURL string, endpoint string) (string, error) {
+	bu := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if bu == "" {
+		return "", fmt.Errorf("empty baseURL")
+	}
+	ep := strings.TrimSpace(endpoint)
+	if ep == "" {
+		return "", fmt.Errorf("empty endpoint")
+	}
+	if strings.HasPrefix(ep, "http://") || strings.HasPrefix(ep, "https://") {
+		return ep, nil
+	}
+	if !strings.HasPrefix(ep, "/") {
+		ep = "/" + ep
+	}
+	return bu + ep, nil
 }
 
 func parseCodexBackendModels(body []byte) []string {
@@ -119,12 +142,12 @@ func fetchCodexBackendModelsOnce(
 	accountID string,
 	path string,
 ) ([]string, error) {
-	bu := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if bu == "" {
-		return nil, fmt.Errorf("empty baseURL")
+	url, err := buildCodexModelDiscoveryURL(baseURL, path)
+	if err != nil {
+		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, bu+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -156,6 +179,16 @@ func fetchCodexBackendModelsOnce(
 	return models, nil
 }
 
+func pickCodexReferenceModels(chatgptModels []string, apiModels []string) ([]string, string) {
+	if len(chatgptModels) > 0 {
+		return normalizeCodexModelNames(chatgptModels), "ChatGPT 可见模型"
+	}
+	if len(apiModels) > 0 {
+		return normalizeCodexModelNames(apiModels), "OpenAI /v1/models 模型"
+	}
+	return nil, "上游模型"
+}
+
 func FetchCodexUpstreamModelLists(
 	ctx context.Context,
 	client *http.Client,
@@ -173,24 +206,50 @@ func FetchCodexUpstreamModelLists(
 		return nil, fmt.Errorf("empty accountID")
 	}
 
-	paths := []string{
-		"/backend-api/models",
-		"/backend-api/models?history_and_training_disabled=false",
-	}
-	var lastErr error
-	for _, path := range paths {
-		chatgptModels, err := fetchCodexBackendModelsOnce(ctx, client, baseURL, accessToken, accountID, path)
+	settings := system_setting.GetCodexModelDiscoverySetting()
+	chatgptPath := strings.TrimSpace(settings.ChatGPTModelsPath)
+	openAIPath := strings.TrimSpace(settings.OpenAIModelsPath)
+
+	var (
+		chatgptModels []string
+		apiModels     []string
+		errMessages   []string
+	)
+
+	if chatgptPath != "" {
+		models, err := fetchCodexBackendModelsOnce(ctx, client, baseURL, accessToken, accountID, chatgptPath)
 		if err != nil {
-			lastErr = err
-			continue
+			errMessages = append(errMessages, fmt.Sprintf("chatgpt source %q failed: %v", chatgptPath, err))
+		} else {
+			chatgptModels = models
 		}
-		return &CodexUpstreamModelLists{
-			ChatGPTModels: chatgptModels,
-			CodexModels:   filterCodexCompatibleModels(chatgptModels),
-		}, nil
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("failed to fetch codex models")
+	if openAIPath != "" {
+		models, err := fetchCodexBackendModelsOnce(ctx, client, baseURL, accessToken, accountID, openAIPath)
+		if err != nil {
+			errMessages = append(errMessages, fmt.Sprintf("openai source %q failed: %v", openAIPath, err))
+		} else {
+			apiModels = models
+		}
 	}
-	return nil, lastErr
+
+	if len(chatgptModels) == 0 && len(apiModels) == 0 {
+		if len(errMessages) == 0 {
+			return nil, fmt.Errorf("failed to fetch codex models")
+		}
+		return nil, errors.New(strings.Join(errMessages, "; "))
+	}
+
+	referenceModels, referenceLabel := pickCodexReferenceModels(chatgptModels, apiModels)
+	codexModels := filterCodexCompatibleModels(
+		normalizeCodexModelNames(append(chatgptModels, apiModels...)),
+	)
+
+	return &CodexUpstreamModelLists{
+		ChatGPTModels:   normalizeCodexModelNames(chatgptModels),
+		APIModels:       normalizeCodexModelNames(apiModels),
+		ReferenceModels: referenceModels,
+		ReferenceLabel:  referenceLabel,
+		CodexModels:     codexModels,
+	}, nil
 }
