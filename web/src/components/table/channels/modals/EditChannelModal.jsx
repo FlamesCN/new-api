@@ -275,7 +275,10 @@ const EditChannelModal = (props) => {
   const [isModalOpenurl, setIsModalOpenurl] = useState(false);
   const [modelModalVisible, setModelModalVisible] = useState(false);
   const [fetchedModels, setFetchedModels] = useState([]);
-  const [fetchedChatGPTModels, setFetchedChatGPTModels] = useState([]);
+  const [fetchedReferenceModels, setFetchedReferenceModels] = useState([]);
+  const [fetchedReferenceTitle, setFetchedReferenceTitle] = useState(
+    'ChatGPT 可见模型',
+  );
   const [modelMappingValueModalVisible, setModelMappingValueModalVisible] =
     useState(false);
   const [modelMappingValueModalModels, setModelMappingValueModalModels] =
@@ -1106,22 +1109,29 @@ const EditChannelModal = (props) => {
       });
       if (res && res.data && res.data.success) {
         models.push(...res.data.data);
-        setFetchedChatGPTModels(
-          Array.isArray(res.data.meta?.chatgpt_models)
-            ? res.data.meta.chatgpt_models
-            : [],
+        setFetchedReferenceModels(
+          Array.isArray(res.data.meta?.reference_models)
+            ? res.data.meta.reference_models
+            : Array.isArray(res.data.meta?.chatgpt_models)
+              ? res.data.meta.chatgpt_models
+              : [],
+        );
+        setFetchedReferenceTitle(
+          String(res.data.meta?.reference_label || 'ChatGPT 可见模型'),
         );
         if (
           !silent &&
           inputs.type === 57 &&
           res.data.meta &&
-          typeof res.data.meta.chatgpt_model_count === 'number'
+          (typeof res.data.meta.chatgpt_model_count === 'number' ||
+            typeof res.data.meta.api_model_count === 'number')
         ) {
           showInfo(
             t(
-              '已获取 ChatGPT 可见模型 {{chatgpt}} 个，筛出 Codex 兼容模型 {{codex}} 个',
+              '已获取 ChatGPT 模型 {{chatgpt}} 个，/v1/models 模型 {{api}} 个，筛出 Codex 兼容模型 {{codex}} 个',
               {
-                chatgpt: res.data.meta.chatgpt_model_count,
+                chatgpt: Number(res.data.meta.chatgpt_model_count || 0),
+                api: Number(res.data.meta.api_model_count || 0),
                 codex:
                   typeof res.data.meta.codex_model_count === 'number'
                     ? res.data.meta.codex_model_count
@@ -1152,22 +1162,29 @@ const EditChannelModal = (props) => {
 
           if (res && res.data && res.data.success) {
             models.push(...res.data.data);
-            setFetchedChatGPTModels(
-              Array.isArray(res.data.meta?.chatgpt_models)
-                ? res.data.meta.chatgpt_models
-                : [],
+            setFetchedReferenceModels(
+              Array.isArray(res.data.meta?.reference_models)
+                ? res.data.meta.reference_models
+                : Array.isArray(res.data.meta?.chatgpt_models)
+                  ? res.data.meta.chatgpt_models
+                  : [],
+            );
+            setFetchedReferenceTitle(
+              String(res.data.meta?.reference_label || 'ChatGPT 可见模型'),
             );
             if (
               !silent &&
               inputs.type === 57 &&
               res.data.meta &&
-              typeof res.data.meta.chatgpt_model_count === 'number'
+              (typeof res.data.meta.chatgpt_model_count === 'number' ||
+                typeof res.data.meta.api_model_count === 'number')
             ) {
               showInfo(
                 t(
-                  '已获取 ChatGPT 可见模型 {{chatgpt}} 个，筛出 Codex 兼容模型 {{codex}} 个',
+                  '已获取 ChatGPT 模型 {{chatgpt}} 个，/v1/models 模型 {{api}} 个，筛出 Codex 兼容模型 {{codex}} 个',
                   {
-                    chatgpt: res.data.meta.chatgpt_model_count,
+                    chatgpt: Number(res.data.meta.chatgpt_model_count || 0),
+                    api: Number(res.data.meta.api_model_count || 0),
                     codex:
                       typeof res.data.meta.codex_model_count === 'number'
                         ? res.data.meta.codex_model_count
@@ -1177,12 +1194,14 @@ const EditChannelModal = (props) => {
               );
             }
           } else {
-            setFetchedChatGPTModels([]);
+            setFetchedReferenceModels([]);
+            setFetchedReferenceTitle('ChatGPT 可见模型');
             err = true;
           }
         } catch (error) {
           console.error('Error fetching models:', error);
-          setFetchedChatGPTModels([]);
+          setFetchedReferenceModels([]);
+          setFetchedReferenceTitle('ChatGPT 可见模型');
           err = true;
         }
       }
@@ -1197,7 +1216,8 @@ const EditChannelModal = (props) => {
       setLoading(false);
       return uniqueModels;
     } else {
-      setFetchedChatGPTModels([]);
+      setFetchedReferenceModels([]);
+      setFetchedReferenceTitle('ChatGPT 可见模型');
       showError(t('获取模型列表失败'));
     }
     setLoading(false);
@@ -4302,11 +4322,11 @@ const EditChannelModal = (props) => {
       <ModelSelectModal
         visible={modelModalVisible}
         models={fetchedModels}
-        secondaryModels={inputs.type === 57 ? fetchedChatGPTModels : []}
+        secondaryModels={inputs.type === 57 ? fetchedReferenceModels : []}
         primaryTitle={
           inputs.type === 57 ? t('Codex 兼容模型') : t('获取到的模型')
         }
-        secondaryTitle={t('ChatGPT 可见模型')}
+        secondaryTitle={t(fetchedReferenceTitle)}
         selected={inputs.models}
         redirectModels={redirectModelList}
         onConfirm={(selectedModels) => {

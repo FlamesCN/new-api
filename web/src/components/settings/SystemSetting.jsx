@@ -110,6 +110,8 @@ const SystemSetting = () => {
     'fetch_setting.ip_list': [],
     'fetch_setting.allowed_ports': [],
     'fetch_setting.apply_ip_filter_for_domain': true,
+    'codex_model_discovery.chatgpt_models_path': '/backend-api/models',
+    'codex_model_discovery.openai_models_path': '/v1/models',
   });
 
   const [originInputs, setOriginInputs] = useState({});
@@ -400,6 +402,20 @@ const SystemSetting = () => {
     if (options.length > 0) {
       await updateOptions(options);
     }
+  };
+
+  const submitCodexModelDiscovery = async () => {
+    const options = [
+      {
+        key: 'codex_model_discovery.chatgpt_models_path',
+        value: (inputs['codex_model_discovery.chatgpt_models_path'] || '').trim(),
+      },
+      {
+        key: 'codex_model_discovery.openai_models_path',
+        value: (inputs['codex_model_discovery.openai_models_path'] || '').trim(),
+      },
+    ];
+    await updateOptions(options);
   };
 
   const handleAddEmail = () => {
@@ -980,6 +996,44 @@ const SystemSetting = () => {
 
                   <Button onClick={submitSSRF} style={{ marginTop: 16 }}>
                     {t('更新SSRF防护设置')}
+                  </Button>
+                </Form.Section>
+              </Card>
+
+              <Card>
+                <Form.Section text={t('Codex 模型发现设置')}>
+                  <Text>
+                    {t(
+                      '用于配置 Codex 渠道获取模型列表时使用的两个上游来源。支持填写相对路径，也支持直接填写完整 URL。',
+                    )}
+                  </Text>
+                  <Row
+                    gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
+                    style={{ marginTop: 16 }}
+                  >
+                    <Col xs={24} sm={24} md={12} lg={12} xl={12}>
+                      <Form.Input
+                        field="['codex_model_discovery.chatgpt_models_path']"
+                        label={t('ChatGPT 模型来源')}
+                        placeholder='/backend-api/models'
+                        extraText={t(
+                          '默认使用 chatgpt.com 的 backend-api 模型列表；可填完整 URL 覆盖。',
+                        )}
+                      />
+                    </Col>
+                    <Col xs={24} sm={24} md={12} lg={12} xl={12}>
+                      <Form.Input
+                        field="['codex_model_discovery.openai_models_path']"
+                        label={t('OpenAI /v1/models 来源')}
+                        placeholder='/v1/models'
+                        extraText={t(
+                          '当 ChatGPT 来源不可用或模型不全时，会补充尝试这个来源。',
+                        )}
+                      />
+                    </Col>
+                  </Row>
+                  <Button onClick={submitCodexModelDiscovery} style={{ marginTop: 16 }}>
+                    {t('保存 Codex 模型发现设置')}
                   </Button>
                 </Form.Section>
               </Card>
