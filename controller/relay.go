@@ -75,6 +75,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		ws          *websocket.Conn
 	)
 
+	defer func() {
+		common.SetContextKey(c, constant.ContextKeyRelayFailed, newAPIError != nil)
+	}()
+
 	if relayFormat == types.RelayFormatOpenAIRealtime {
 		var err error
 		ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
