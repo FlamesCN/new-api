@@ -554,7 +554,7 @@ func TestGetPreferredChannelByAffinity_InvalidatesChannelNoLongerEnabledForGroup
 	require.False(t, stillFound)
 }
 
-func TestClaudeTemplateSyncsClaudeSessionToPromptCacheKeyAndSessionHeader(t *testing.T) {
+func TestClaudeTemplatePassesHeadersWithoutPromptCacheKeyMutation(t *testing.T) {
 	setting := operation_setting.GetChannelAffinitySetting()
 	require.NotNil(t, setting)
 
@@ -571,6 +571,53 @@ func TestClaudeTemplateSyncsClaudeSessionToPromptCacheKeyAndSessionHeader(t *tes
 	meta := channelAffinityMeta{
 		RuleName:      claudeRule.Name,
 		ParamTemplate: claudeRule.ParamOverrideTemplate,
+		KeyValue:      "claude-session-123",
+	}
+	ctx := buildChannelAffinityTemplateContextForTest(meta)
+
+	mergedOverride, applied := ApplyChannelAffinityOverrideTemplate(ctx, map[string]interface{}{})
+	require.True(t, applied)
+
+	info := &relaycommon.RelayInfo{
+		RequestHeaders: map[string]string{
+			"X-Claude-Code-Session-Id": "claude-session-123",
+			"User-Agent":               "claude-cli-test",
+			"X-App":                    "cli",
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ParamOverride:        mergedOverride,
+			ParamOverrideContext: buildChannelAffinityParamOverrideContext(meta),
+		},
+	}
+
+	out, err := relaycommon.ApplyParamOverrideWithRelayInfo([]byte(`{"model":"claude-opus-4-8"}`), info)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"claude-opus-4-8"}`, string(out))
+
+	require.True(t, info.UseRuntimeHeadersOverride)
+	require.Equal(t, "claude-session-123", info.RuntimeHeadersOverride["x-claude-code-session-id"])
+	require.Empty(t, info.RuntimeHeadersOverride["session_id"])
+	require.Equal(t, "claude-cli-test", info.RuntimeHeadersOverride["user-agent"])
+	require.Equal(t, "cli", info.RuntimeHeadersOverride["x-app"])
+}
+
+func TestClaudeCodexCompatTemplateSyncsClaudeSessionToPromptCacheKeyAndSessionHeader(t *testing.T) {
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+
+	var compatRule *operation_setting.ChannelAffinityRule
+	for i := range setting.Rules {
+		rule := &setting.Rules[i]
+		if strings.EqualFold(strings.TrimSpace(rule.Name), "claude cli codex compat trace") {
+			compatRule = rule
+			break
+		}
+	}
+	require.NotNil(t, compatRule)
+
+	meta := channelAffinityMeta{
+		RuleName:      compatRule.Name,
+		ParamTemplate: compatRule.ParamOverrideTemplate,
 		KeyValue:      "claude-session-123",
 	}
 	ctx := buildChannelAffinityTemplateContextForTest(meta)

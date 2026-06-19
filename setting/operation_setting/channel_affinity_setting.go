@@ -78,7 +78,7 @@ func buildPassHeaderTemplate(headers []string) map[string]interface{} {
 	}
 }
 
-func buildClaudeCliHeaderTemplate(headers []string) map[string]interface{} {
+func buildClaudeCliCompatHeaderTemplate(headers []string) map[string]interface{} {
 	clonedHeaders := make([]string, 0, len(headers))
 	clonedHeaders = append(clonedHeaders, headers...)
 	return map[string]interface{}{
@@ -128,7 +128,7 @@ var channelAffinitySetting = ChannelAffinitySetting{
 		},
 		{
 			Name:       "claude cli trace",
-			ModelRegex: []string{"^claude-.*$", "^gpt-.*$"},
+			ModelRegex: []string{"^claude-.*$"},
 			PathRegex:  []string{"/v1/messages"},
 			KeySources: []ChannelAffinityKeySource{
 				{Type: "request_header", Key: "X-Claude-Code-Session-Id"},
@@ -136,7 +136,23 @@ var channelAffinitySetting = ChannelAffinitySetting{
 			},
 			ValueRegex:            "",
 			TTLSeconds:            0,
-			ParamOverrideTemplate: buildClaudeCliHeaderTemplate(claudeCliPassThroughHeaders),
+			ParamOverrideTemplate: buildPassHeaderTemplate(claudeCliPassThroughHeaders),
+			SkipRetryOnFailure:    true,
+			IncludeUsingGroup:     true,
+			IncludeRuleName:       true,
+			UserAgentInclude:      nil,
+		},
+		{
+			Name:       "claude cli codex compat trace",
+			ModelRegex: []string{"^gpt-.*$"},
+			PathRegex:  []string{"/v1/messages"},
+			KeySources: []ChannelAffinityKeySource{
+				{Type: "request_header", Key: "X-Claude-Code-Session-Id"},
+				{Type: "gjson", Path: "metadata.user_id", NestedPath: "session_id"},
+			},
+			ValueRegex:            "",
+			TTLSeconds:            0,
+			ParamOverrideTemplate: buildClaudeCliCompatHeaderTemplate(claudeCliPassThroughHeaders),
 			SkipRetryOnFailure:    true,
 			IncludeUsingGroup:     true,
 			IncludeRuleName:       true,
