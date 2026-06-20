@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -16,6 +17,26 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func newResponsesStreamIncompleteError() *types.NewAPIError {
+	return types.NewOpenAIError(
+		fmt.Errorf("responses stream disconnected before completion"),
+		types.ErrorCodeBadResponse,
+		http.StatusBadGateway,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
+func finalizeResponsesStream(info *relaycommon.RelayInfo, sawCompleted bool) *types.NewAPIError {
+	if sawCompleted {
+		if info != nil && info.StreamStatus != nil {
+			info.StreamStatus.EndReason = relaycommon.StreamEndReasonDone
+			info.StreamStatus.EndError = nil
+		}
+		return nil
+	}
+	return newResponsesStreamIncompleteError()
+}
 
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
@@ -78,6 +99,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	var sawCompleted atomic.Bool
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -91,6 +113,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed":
+			sawCompleted.Store(true)
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
@@ -112,6 +135,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
+			sr.Done()
+			return
 		case "response.output_text.delta":
 			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
@@ -129,6 +154,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+
+	if finalizeErr := finalizeResponsesStream(info, sawCompleted.Load()); finalizeErr != nil {
+		return nil, finalizeErr
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量

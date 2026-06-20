@@ -38,6 +38,7 @@ import { IconDelete, IconMenu, IconPlus } from '@douyinfe/semi-icons';
 import { copy, showError, showSuccess, verifyJSON } from '../../../../helpers';
 import {
   CLAUDE_CLI_HEADER_PASSTHROUGH_TEMPLATE,
+  CLAUDE_CLI_CODEX_COMPAT_TEMPLATE,
   CODEX_CLI_HEADER_PASSTHROUGH_TEMPLATE,
 } from '../../../../constants/channel-affinity-template.constants';
 
@@ -423,6 +424,12 @@ const TEMPLATE_PRESET_CONFIG = {
     label: 'Claude CLI 请求头透传',
     kind: 'operations',
     payload: CLAUDE_CLI_HEADER_PASSTHROUGH_TEMPLATE,
+  },
+  claude_cli_codex_compat: {
+    group: 'scenario',
+    label: 'Claude CLI -> GPT 兼容缓存',
+    kind: 'operations',
+    payload: CLAUDE_CLI_CODEX_COMPAT_TEMPLATE,
   },
   codex_cli_headers_passthrough: {
     group: 'scenario',

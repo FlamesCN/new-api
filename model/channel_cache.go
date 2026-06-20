@@ -222,6 +222,69 @@ func CacheGetChannelInfo(id int) (*ChannelInfo, error) {
 	return &c.ChannelInfo, nil
 }
 
+func CountEnabledChannelsForGroupModel(group string, model string) int {
+	group = strings.TrimSpace(group)
+	model = strings.TrimSpace(model)
+	if group == "" || model == "" {
+		return 0
+	}
+
+	normalizedModel := ratio_setting.FormatMatchingModelName(model)
+
+	if common.MemoryCacheEnabled {
+		channelSyncLock.RLock()
+		defer channelSyncLock.RUnlock()
+		if count := len(group2model2channels[group][model]); count > 0 {
+			return count
+		}
+		if normalizedModel != "" && normalizedModel != model {
+			return len(group2model2channels[group][normalizedModel])
+		}
+		return 0
+	}
+
+	channels, err := GetAllChannels(0, 0, true, false)
+	if err != nil {
+		return 0
+	}
+
+	exactMatches := make(map[int]struct{})
+	normalizedMatches := make(map[int]struct{})
+	for _, channel := range channels {
+		if channel == nil || channel.Status != common.ChannelStatusEnabled {
+			continue
+		}
+		if !channelContainsGroup(channel, group) {
+			continue
+		}
+
+		for _, channelModel := range channel.GetModels() {
+			channelModel = strings.TrimSpace(channelModel)
+			if channelModel == model {
+				exactMatches[channel.Id] = struct{}{}
+				break
+			}
+			if normalizedModel != "" && normalizedModel != model && channelModel == normalizedModel {
+				normalizedMatches[channel.Id] = struct{}{}
+			}
+		}
+	}
+
+	if len(exactMatches) > 0 {
+		return len(exactMatches)
+	}
+	return len(normalizedMatches)
+}
+
+func channelContainsGroup(channel *Channel, group string) bool {
+	for _, channelGroup := range channel.GetGroups() {
+		if channelGroup == group {
+			return true
+		}
+	}
+	return false
+}
+
 func CacheUpdateChannelStatus(id int, status int) {
 	if !common.MemoryCacheEnabled {
 		return

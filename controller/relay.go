@@ -64,6 +64,8 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 	return err
 }
 
+var countEnabledChannelsForRetry = model.CountEnabledChannelsForGroupModel
+
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
@@ -74,6 +76,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError *types.NewAPIError
 		ws          *websocket.Conn
 	)
+
+	defer func() {
+		common.SetContextKey(c, constant.ContextKeyRelayFailed, newAPIError != nil)
+	}()
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
 		var err error
@@ -334,6 +340,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if _, ok := c.Get("specific_channel_id"); ok {
 		return false
 	}
+	if shouldStopRetryForSingleChannel429(c, openaiErr) {
+		return false
+	}
 	code := openaiErr.StatusCode
 	if code >= 200 && code < 300 {
 		return false
@@ -345,6 +354,32 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	return operation_setting.ShouldRetryByStatusCode(code)
+}
+
+func shouldStopRetryForSingleChannel429(c *gin.Context, openaiErr *types.NewAPIError) bool {
+	if openaiErr == nil || openaiErr.StatusCode != http.StatusTooManyRequests {
+		return false
+	}
+
+	tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
+	if tokenGroup == "auto" {
+		return false
+	}
+
+	usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	if usingGroup == "" {
+		usingGroup = tokenGroup
+	}
+	if usingGroup == "" {
+		usingGroup = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	}
+
+	modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	if usingGroup == "" || modelName == "" {
+		return false
+	}
+
+	return countEnabledChannelsForRetry(usingGroup, modelName) <= 1
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
