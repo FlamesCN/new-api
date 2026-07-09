@@ -78,7 +78,7 @@ Check whether DB overrides exist:
 ```bash
 python3 - <<'PY'
 import sqlite3
-conn = sqlite3.connect('/home/Flames/new-api/data/new-api.db')
+conn = sqlite3.connect('/path/to/new-api/data/new-api.db')
 cur = conn.cursor()
 cur.execute("select key, value from options where key like 'channel_affinity_setting.%' order by key")
 for row in cur.fetchall():

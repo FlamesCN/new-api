@@ -15,6 +15,18 @@ This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI pro
 - **Auth**: JWT, WebAuthn/Passkeys, OAuth (GitHub, Discord, OIDC, etc.)
 - **Frontend package manager**: Bun (preferred over npm/yarn/pnpm)
 
+## Deployment References
+
+- Real production deploy details are maintained in a **private/local-only** ops workspace and local ignored helper files.
+- Do **not** commit concrete production IPs, absolute workstation paths, SSH targets, or remote filesystem layouts into tracked files.
+- When the user asks to “发布 / 上线 / deploy new-api”, prefer the private deploy script / private ops notes over the generic GitHub Actions / Docker Compose paths in this repo, unless the user explicitly wants the CI/image route.
+- Public-repo-safe placeholders are acceptable in tracked docs, e.g.:
+  - app dir: `/path/to/new-api`
+  - binary: `/path/to/new-api/bin/new-api`
+  - data: `/path/to/new-api/data/new-api.db`
+  - env: `/path/to/new-api/.env`
+  - service: `new-api.service`
+
 ## Architecture
 
 Layered architecture: Router -> Controller -> Service -> Model
