@@ -34,6 +34,7 @@ type ChannelAffinitySetting struct {
 	InvalidateStaleCacheEnabled bool                  `json:"invalidate_stale_cache_enabled"`
 	RetryOnDisabledChannel      bool                  `json:"retry_on_disabled_channel"`
 	RetryOnChannelQuotaExceeded bool                  `json:"retry_on_channel_quota_exceeded"`
+	KeepOnChannelDisabled       bool                  `json:"keep_on_channel_disabled"`
 	MaxEntries                  int                   `json:"max_entries"`
 	DefaultTTLSeconds           int                   `json:"default_ttl_seconds"`
 	Rules                       []ChannelAffinityRule `json:"rules"`
@@ -108,6 +109,7 @@ var channelAffinitySetting = ChannelAffinitySetting{
 	InvalidateStaleCacheEnabled: true,
 	RetryOnDisabledChannel:      true,
 	RetryOnChannelQuotaExceeded: true,
+	KeepOnChannelDisabled:       false,
 	MaxEntries:                  100_000,
 	DefaultTTLSeconds:           3600,
 	Rules: []ChannelAffinityRule{
