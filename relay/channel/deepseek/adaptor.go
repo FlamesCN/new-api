@@ -62,6 +62,12 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	case types.RelayFormatClaude:
 		return fmt.Sprintf("%s/anthropic/v1/messages", info.ChannelBaseUrl), nil
 	default:
+		switch info.RelayMode {
+		case constant.RelayModeResponses:
+			return fmt.Sprintf("%s/v1/responses", info.ChannelBaseUrl), nil
+		case constant.RelayModeResponsesCompact:
+			return fmt.Sprintf("%s/v1/responses/compact", info.ChannelBaseUrl), nil
+		}
 		if !strings.HasSuffix(info.ChannelBaseUrl, "/beta") {
 			fimBaseUrl += "/beta"
 		}
@@ -159,8 +165,7 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	// TODO implement me
-	return nil, errors.New("not implemented")
+	return &request, nil
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
