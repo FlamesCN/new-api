@@ -3,9 +3,9 @@ package deepseek
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	relaykitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -13,11 +13,11 @@ func TestConvertOpenAIResponsesRequestPassesThrough(t *testing.T) {
 	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(
 		nil,
 		&relaycommon.RelayInfo{},
-		dto.OpenAIResponsesRequest{Model: "deepseek-v4-flash"},
+		relaykitdto.OpenAIResponsesRequest{Model: "deepseek-v4-flash"},
 	)
 
 	require.NoError(t, err)
-	request, ok := converted.(*dto.OpenAIResponsesRequest)
+	request, ok := converted.(relaykitdto.OpenAIResponsesRequest)
 	require.True(t, ok)
 	require.Equal(t, "deepseek-v4-flash", request.Model)
 }

@@ -7,20 +7,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/types"
+	relaykittypes "github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func TestResolveChannelTestStream(t *testing.T) {
-	settingsBytes, err := common.Marshal(dto.ChannelOtherSettings{
-		TestStreamEnabled: true,
-	})
-	if err != nil {
-		t.Fatalf("marshal settings failed: %v", err)
-	}
-
-	channel := &model.Channel{OtherSettings: string(settingsBytes)}
+	channel := &model.Channel{OtherSettings: `{"test_stream_enabled":true}`}
 	if !resolveChannelTestStream(channel, nil) {
 		t.Fatal("expected channel default stream test setting to be used when override is nil")
 	}
@@ -153,7 +145,7 @@ func TestResolveChannelTestModels(t *testing.T) {
 }
 
 func TestShouldRetryChannelTestWithNextModel(t *testing.T) {
-	retryable := types.WithOpenAIError(types.OpenAIError{
+	retryable := relaykittypes.WithOpenAIError(relaykittypes.OpenAIError{
 		Message: "The 'gpt-5' model is not supported when using Codex with a ChatGPT account.",
 		Type:    "invalid_request_error",
 		Code:    "model_not_found",
@@ -162,7 +154,7 @@ func TestShouldRetryChannelTestWithNextModel(t *testing.T) {
 		t.Fatal("expected unsupported model error to trigger fallback")
 	}
 
-	nonRetryable := types.WithOpenAIError(types.OpenAIError{
+	nonRetryable := relaykittypes.WithOpenAIError(relaykittypes.OpenAIError{
 		Message: "account_deactivated",
 		Type:    "invalid_request_error",
 		Code:    "account_deactivated",
@@ -171,7 +163,7 @@ func TestShouldRetryChannelTestWithNextModel(t *testing.T) {
 		t.Fatal("expected account-level failure to stop fallback")
 	}
 
-	channelErr := types.NewError(errors.New("no enabled keys"), types.ErrorCodeChannelNoAvailableKey)
+	channelErr := relaykittypes.NewError(errors.New("no enabled keys"), relaykittypes.ErrorCodeChannelNoAvailableKey)
 	if shouldRetryChannelTestWithNextModel(channelErr) {
 		t.Fatal("expected channel-level errors to stop fallback")
 	}

@@ -7,7 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/types"
+	relaykittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +28,7 @@ func TestShouldRetryStopsSingleChannel429(t *testing.T) {
 	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "dc-gemini")
 	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "gemini-3.1-pro-preview")
 
-	err := types.WithOpenAIError(types.OpenAIError{
+	err := relaykittypes.WithOpenAIError(relaykittypes.OpenAIError{
 		Message: "You have exhausted your capacity on this model.",
 		Type:    "upstream_error",
 		Code:    429,
@@ -53,7 +53,7 @@ func TestShouldRetryKeepsMultiChannel429Retries(t *testing.T) {
 	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "dc-gemini")
 	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "gemini-3.1-pro-preview")
 
-	err := types.WithOpenAIError(types.OpenAIError{
+	err := relaykittypes.WithOpenAIError(relaykittypes.OpenAIError{
 		Message: "You have exhausted your capacity on this model.",
 		Type:    "upstream_error",
 		Code:    429,
@@ -78,7 +78,7 @@ func TestShouldRetryPreservesAutoGroupFallbackFor429(t *testing.T) {
 	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "dc-gemini")
 	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "gemini-3.1-pro-preview")
 
-	err := types.WithOpenAIError(types.OpenAIError{
+	err := relaykittypes.WithOpenAIError(relaykittypes.OpenAIError{
 		Message: "You have exhausted your capacity on this model.",
 		Type:    "upstream_error",
 		Code:    429,

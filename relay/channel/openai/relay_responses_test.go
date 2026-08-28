@@ -9,7 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	relaykittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +39,7 @@ func TestOaiResponsesStreamHandlerReturnsErrorWhenCompletedEventMissing(t *testi
 
 	require.Nil(t, usage)
 	require.Error(t, err)
-	require.True(t, types.IsSkipRetryError(err))
+	require.True(t, relaykittypes.IsSkipRetryError(err))
 	require.Contains(t, err.Error(), "responses stream disconnected before completion")
 }
 

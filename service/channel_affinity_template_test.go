@@ -12,8 +12,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaykittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -218,7 +218,7 @@ func TestShouldSkipRetryAfterChannelAffinityError_DisabledChannel(t *testing.T) 
 		UsingGroup: "default",
 		ModelName:  "gpt-5",
 	})
-	disabledErr := types.WithOpenAIError(types.OpenAIError{
+	disabledErr := relaykittypes.WithOpenAIError(relaykittypes.OpenAIError{
 		Message: "该渠道已被禁用",
 		Type:    "forbidden",
 		Code:    "channel_disabled",
@@ -246,12 +246,12 @@ func TestShouldSkipRetryAfterChannelAffinityError_QuotaExceeded(t *testing.T) {
 		UsingGroup: "default",
 		ModelName:  "gpt-5",
 	})
-	quotaErr := types.WithOpenAIError(types.OpenAIError{
+	quotaErr := relaykittypes.WithOpenAIError(relaykittypes.OpenAIError{
 		Message: "insufficient quota",
 		Type:    "insufficient_quota",
 		Code:    "insufficient_quota",
 	}, http.StatusTooManyRequests)
-	usageLimitErr := types.WithOpenAIError(types.OpenAIError{
+	usageLimitErr := relaykittypes.WithOpenAIError(relaykittypes.OpenAIError{
 		Message: "You've hit your usage limit. Try again later.",
 	}, http.StatusTooManyRequests)
 
@@ -270,7 +270,7 @@ func TestShouldSkipRetryAfterChannelAffinityError_UnrelatedErrorStillSkips(t *te
 		UsingGroup: "default",
 		ModelName:  "gpt-5",
 	})
-	otherErr := types.NewErrorWithStatusCode(errors.New("upstream timeout"), types.ErrorCodeDoRequestFailed, http.StatusGatewayTimeout)
+	otherErr := relaykittypes.NewErrorWithStatusCode(errors.New("upstream timeout"), relaykittypes.ErrorCodeDoRequestFailed, http.StatusGatewayTimeout)
 	require.True(t, ShouldSkipRetryAfterChannelAffinityError(ctx, otherErr))
 }
 
