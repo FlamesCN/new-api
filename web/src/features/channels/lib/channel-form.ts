@@ -282,6 +282,7 @@ export const channelFormSchema = z
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
     upstream_model_update_ignored_models: z.string().optional(),
+    upstream_model_update_include_patterns: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     if (
@@ -453,6 +454,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
+  upstream_model_update_include_patterns: '',
   advanced_custom: '',
 }
 
@@ -517,6 +519,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
+  let upstreamModelUpdateIncludePatterns = ''
   let advancedCustom = ''
 
   if (channel.settings) {
@@ -542,6 +545,11 @@ export function transformChannelToFormDefaults(
         parsed.upstream_model_update_ignored_models
       )
         ? parsed.upstream_model_update_ignored_models.join(',')
+        : ''
+      upstreamModelUpdateIncludePatterns = Array.isArray(
+        parsed.upstream_model_update_include_patterns
+      )
+        ? parsed.upstream_model_update_include_patterns.join(',')
         : ''
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
@@ -596,6 +604,7 @@ export function transformChannelToFormDefaults(
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
+    upstream_model_update_include_patterns: upstreamModelUpdateIncludePatterns,
     advanced_custom: advancedCustom,
   }
 }
@@ -741,11 +750,25 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
           .filter(Boolean)
       ),
     ]
+    settingsObj.upstream_model_update_include_patterns = [
+      ...new Set(
+        String(formData.upstream_model_update_include_patterns || '')
+          .split(',')
+          .map((pattern) => pattern.trim())
+          .filter(Boolean)
+      ),
+    ]
     if (
       !Array.isArray(settingsObj.upstream_model_update_last_detected_models) ||
       settingsObj.upstream_model_update_check_enabled !== true
     ) {
       settingsObj.upstream_model_update_last_detected_models = []
+    }
+    if (
+      !Array.isArray(settingsObj.upstream_model_update_last_removed_models) ||
+      settingsObj.upstream_model_update_check_enabled !== true
+    ) {
+      settingsObj.upstream_model_update_last_removed_models = []
     }
     if (typeof settingsObj.upstream_model_update_last_check_time !== 'number') {
       settingsObj.upstream_model_update_last_check_time = 0

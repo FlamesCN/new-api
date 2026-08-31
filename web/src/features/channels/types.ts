@@ -106,8 +106,10 @@ export interface ChannelOtherSettings {
   upstream_model_update_check_enabled?: boolean
   upstream_model_update_auto_sync_enabled?: boolean
   upstream_model_update_ignored_models?: string[]
+  upstream_model_update_include_patterns?: string[]
   upstream_model_update_last_check_time?: number
   upstream_model_update_last_detected_models?: string[]
+  upstream_model_update_last_removed_models?: string[]
   advanced_custom?: AdvancedCustomConfig
 }
 

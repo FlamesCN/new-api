@@ -303,6 +303,7 @@ const SENSITIVE_FORM_FIELDS = [
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
   'upstream_model_update_ignored_models',
+  'upstream_model_update_include_patterns',
 ] satisfies (keyof ChannelFormValues)[]
 
 function readAdvancedSettingsPreference(): boolean {
@@ -350,7 +351,8 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.claude_beta_query ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
-    values.upstream_model_update_ignored_models?.trim()
+    values.upstream_model_update_ignored_models?.trim() ||
+    values.upstream_model_update_include_patterns?.trim()
   )
 }
 
@@ -770,6 +772,9 @@ export function ChannelMutateDrawer({
   const currentUpstreamModelUpdateIgnoredModels = form.watch(
     'upstream_model_update_ignored_models'
   )
+  const currentUpstreamModelUpdateIncludePatterns = form.watch(
+    'upstream_model_update_include_patterns'
+  )
   const shouldPreviewUnsavedModels =
     !isEditing ||
     (currentType === CHANNEL_TYPE_ADVANCED_CUSTOM && canEditSensitive)
@@ -1051,7 +1056,8 @@ export function ChannelMutateDrawer({
   const upstreamModelDetectionConfigured = Boolean(
     upstreamModelUpdateCheckEnabled ||
     currentUpstreamModelUpdateAutoSyncEnabled ||
-    currentUpstreamModelUpdateIgnoredModels?.trim()
+    currentUpstreamModelUpdateIgnoredModels?.trim() ||
+    currentUpstreamModelUpdateIncludePatterns?.trim()
   )
   const advancedConfigured = Boolean(
     routingStrategyConfigured ||
@@ -4681,7 +4687,7 @@ export function ChannelMutateDrawer({
                                         </FormLabel>
                                         <FormDescription>
                                           {t(
-                                            'Automatically sync model list when upstream changes are detected'
+                                            'Automatically add and remove models when upstream changes are detected'
                                           )}
                                         </FormDescription>
                                       </div>
@@ -4698,6 +4704,31 @@ export function ChannelMutateDrawer({
                                   )}
                                 />
                               </div>
+                              <FormField
+                                control={form.control}
+                                name='upstream_model_update_include_patterns'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Include upstream models')}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        placeholder={t(
+                                          'e.g., :free,deepseek/,openrouter/free'
+                                        )}
+                                        {...field}
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        'Comma-separated include rules. Use :free for suffix, vendor/ for prefix, regex:/prefix:/suffix:, or exact IDs. Empty means all models.'
+                                      )}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
                               <FormField
                                 control={form.control}
                                 name='upstream_model_update_ignored_models'
