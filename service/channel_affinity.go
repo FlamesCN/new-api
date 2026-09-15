@@ -640,71 +640,78 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 	}
 
 	for _, rule := range setting.Rules {
-		if !matchAnyRegexCached(rule.ModelRegex, modelName) {
-			continue
+		channelID, found, matched := tryApplyChannelAffinityRule(c, setting, rule, modelName, usingGroup, path, userAgent)
+		if matched {
+			return channelID, found
 		}
-		if len(rule.PathRegex) > 0 && !matchAnyRegexCached(rule.PathRegex, path) {
-			continue
-		}
-		if len(rule.UserAgentInclude) > 0 && !matchAnyIncludeFold(rule.UserAgentInclude, userAgent) {
-			continue
-		}
-		var affinityValue string
-		var usedSource operation_setting.ChannelAffinityKeySource
-		for _, src := range rule.KeySources {
-			affinityValue = extractChannelAffinityValue(c, src)
-			if affinityValue != "" {
-				usedSource = src
-				break
-			}
-		}
-		if affinityValue == "" {
-			continue
-		}
-		if rule.ValueRegex != "" && !matchAnyRegexCached([]string{rule.ValueRegex}, affinityValue) {
-			continue
-		}
-
-		ttlSeconds := rule.TTLSeconds
-		if ttlSeconds <= 0 {
-			ttlSeconds = setting.DefaultTTLSeconds
-		}
-		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
-		cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
-		setChannelAffinityContext(c, channelAffinityMeta{
-			CacheKey:            cacheKeyFull,
-			TTLSeconds:          ttlSeconds,
-			RuleName:            rule.Name,
-			SkipRetry:           rule.SkipRetryOnFailure,
-			ParamTemplate:       cloneStringAnyMap(rule.ParamOverrideTemplate),
-			KeyValue:            affinityValue,
-			KeySourceType:       strings.TrimSpace(usedSource.Type),
-			KeySourceKey:        strings.TrimSpace(usedSource.Key),
-			KeySourcePath:       strings.TrimSpace(usedSource.Path),
-			KeySourceNestedPath: strings.TrimSpace(usedSource.NestedPath),
-			KeyHint:             buildChannelAffinityKeyHint(affinityValue),
-			KeyFingerprint:      affinityFingerprint(affinityValue),
-			UsingGroup:          usingGroup,
-			ModelName:           modelName,
-			RequestPath:         path,
-		})
-
-		cache := getChannelAffinityCache()
-		channelID, found, err := cache.Get(cacheKeySuffix)
-		if err != nil {
-			common.SysError(fmt.Sprintf("channel affinity cache get failed: key=%s, err=%v", cacheKeyFull, err))
-			return 0, false
-		}
-		if found {
-			if setting.InvalidateStaleCacheEnabled && !isChannelAffinityTargetUsable(c, channelID, modelName, usingGroup) {
-				invalidateChannelAffinityCacheEntry(cacheKeyFull)
-				return 0, false
-			}
-			return channelID, true
-		}
-		return 0, false
 	}
 	return 0, false
+}
+
+func tryApplyChannelAffinityRule(c *gin.Context, setting *operation_setting.ChannelAffinitySetting, rule operation_setting.ChannelAffinityRule, modelName, usingGroup, path, userAgent string) (int, bool, bool) {
+	if !matchAnyRegexCached(rule.ModelRegex, modelName) {
+		return 0, false, false
+	}
+	if len(rule.PathRegex) > 0 && !matchAnyRegexCached(rule.PathRegex, path) {
+		return 0, false, false
+	}
+	if len(rule.UserAgentInclude) > 0 && !matchAnyIncludeFold(rule.UserAgentInclude, userAgent) {
+		return 0, false, false
+	}
+	var affinityValue string
+	var usedSource operation_setting.ChannelAffinityKeySource
+	for _, src := range rule.KeySources {
+		affinityValue = extractChannelAffinityValue(c, src)
+		if affinityValue != "" {
+			usedSource = src
+			break
+		}
+	}
+	if affinityValue == "" {
+		return 0, false, false
+	}
+	if rule.ValueRegex != "" && !matchAnyRegexCached([]string{rule.ValueRegex}, affinityValue) {
+		return 0, false, false
+	}
+
+	ttlSeconds := rule.TTLSeconds
+	if ttlSeconds <= 0 {
+		ttlSeconds = setting.DefaultTTLSeconds
+	}
+	cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
+	cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
+	setChannelAffinityContext(c, channelAffinityMeta{
+		CacheKey:            cacheKeyFull,
+		TTLSeconds:          ttlSeconds,
+		RuleName:            rule.Name,
+		SkipRetry:           rule.SkipRetryOnFailure,
+		ParamTemplate:       cloneStringAnyMap(rule.ParamOverrideTemplate),
+		KeyValue:            affinityValue,
+		KeySourceType:       strings.TrimSpace(usedSource.Type),
+		KeySourceKey:        strings.TrimSpace(usedSource.Key),
+		KeySourcePath:       strings.TrimSpace(usedSource.Path),
+		KeySourceNestedPath: strings.TrimSpace(usedSource.NestedPath),
+		KeyHint:             buildChannelAffinityKeyHint(affinityValue),
+		KeyFingerprint:      affinityFingerprint(affinityValue),
+		UsingGroup:          usingGroup,
+		ModelName:           modelName,
+		RequestPath:         path,
+	})
+
+	cache := getChannelAffinityCache()
+	channelID, found, err := cache.Get(cacheKeySuffix)
+	if err != nil {
+		common.SysError(fmt.Sprintf("channel affinity cache get failed: key=%s, err=%v", cacheKeyFull, err))
+		return 0, false, true
+	}
+	if found {
+		if setting.InvalidateStaleCacheEnabled && !isChannelAffinityTargetUsable(c, channelID, modelName, usingGroup) {
+			invalidateChannelAffinityCacheEntry(cacheKeyFull)
+			return 0, false, true
+		}
+		return channelID, true, true
+	}
+	return 0, false, true
 }
 
 func invalidateChannelAffinityCacheEntry(cacheKey string) {

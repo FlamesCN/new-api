@@ -19,6 +19,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Recovery parses and re-encodes JSON in memory even for disk-backed bodies.
+// Keep this optional retry bounded independently of the inbound request limit.
+const maxEncryptedContentRetryBodyBytes int64 = 1 << 20
+
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
@@ -76,65 +80,102 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
-	var requestBody io.Reader
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = common.NewReplayableBodyReader(storage)
-	} else {
-		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-		jsonData, err := common.Marshal(convertedRequest)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-
-		// remove disabled fields for OpenAI Responses API
-		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-
-		// apply param override
-		if len(info.ParamOverride) > 0 {
-			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-			if err != nil {
-				return newAPIErrorFromParamOverride(err)
-			}
-		}
-
-		logger.LogDebug(c, "requestBody: %s", jsonData)
-		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		defer closer.Close()
-		jsonData = nil
-		requestBody = body
-	}
-
-	var httpResp *http.Response
-	resp, err := adaptor.DoRequest(c, info, requestBody)
-	if err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
-	}
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
+	strippedEncryptedReasoning := false
+	var retryBody []byte
+	var httpResp *http.Response
+	for {
+		var requestBody common.ReplayableBody
+		if strippedEncryptedReasoning {
+			body, closer, err := relaycommon.NewOutboundJSONBody(retryBody)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			defer closer.Close()
+			requestBody = body
+			retryBody = nil
+		} else if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+			storage, err := common.GetBodyStorage(c)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+			}
+			requestBody = common.NewReplayableBodyReader(storage)
+		} else {
+			convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
+			jsonData, err := common.Marshal(convertedRequest)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
 
-	if resp != nil {
-		httpResp = resp.(*http.Response)
+			jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
 
-		if httpResp.StatusCode != http.StatusOK {
-			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
-			// reset status code 重置状态码
-			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-			return newAPIError
+			if len(info.ParamOverride) > 0 {
+				jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+				if err != nil {
+					return newAPIErrorFromParamOverride(err)
+				}
+			}
+
+			logger.LogDebug(c, "requestBody: %s", jsonData)
+			body, bodyCloser, err := relaycommon.NewOutboundJSONBody(jsonData)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			defer bodyCloser.Close()
+			requestBody = body
 		}
+
+		resp, err := adaptor.DoRequest(c, info, requestBody)
+		if err != nil {
+			return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+		}
+
+		if resp == nil {
+			break
+		}
+		httpResp = resp.(*http.Response)
+		if httpResp.StatusCode == http.StatusOK {
+			break
+		}
+
+		newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+		if !strippedEncryptedReasoning && helper.IsInvalidEncryptedContentError(newAPIError) {
+			if size := requestBody.Size(); size <= 0 || size > maxEncryptedContentRetryBodyBytes {
+				logger.LogWarn(c, fmt.Sprintf("skipping encrypted_content recovery: body size %d exceeds recovery bounds (max %d bytes)", size, maxEncryptedContentRetryBodyBytes))
+				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+				return newAPIError
+			}
+			// Retry the actual outbound body without reapplying conversion or
+			// overrides; passthrough requests must retain their unknown fields.
+			reader, readErr := requestBody.NewReader()
+			if readErr != nil {
+				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+				return newAPIError
+			}
+			outboundBody, readErr := io.ReadAll(io.LimitReader(reader, maxEncryptedContentRetryBodyBytes+1))
+			_ = reader.Close()
+			if readErr != nil || int64(len(outboundBody)) > maxEncryptedContentRetryBodyBytes {
+				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+				return newAPIError
+			}
+			strippedBody, removed, stripErr := helper.StripEncryptedReasoningFromResponsesBody(outboundBody)
+			if stripErr == nil && removed > 0 {
+				strippedEncryptedReasoning = true
+				retryBody = strippedBody
+				logger.LogWarn(c, fmt.Sprintf("upstream rejected encrypted_content, stripped %d reasoning item(s) and retrying once", removed))
+				continue
+			}
+		}
+		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+		return newAPIError
 	}
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)

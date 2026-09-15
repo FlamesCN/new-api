@@ -15,6 +15,7 @@ import (
 	relaykittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -677,4 +678,292 @@ func TestExtractChannelAffinityValueFromNestedJSONString(t *testing.T) {
 		NestedPath: "session_id",
 	})
 	require.Equal(t, "nested-session", value)
+}
+
+func TestGetPreferredChannelByAffinity_UsesConfiguredSessionHeaderFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const channelID = 9528
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+	originalSetting := *setting
+	setting.Enabled = true
+	setting.InvalidateStaleCacheEnabled = false
+	t.Cleanup(func() {
+		*setting = originalSetting
+	})
+
+	setting.Rules = []operation_setting.ChannelAffinityRule{
+		{
+			Name:       "codex cli trace",
+			ModelRegex: []string{"^gpt-.*$"},
+			PathRegex:  []string{"/v1/responses"},
+			KeySources: []operation_setting.ChannelAffinityKeySource{
+				{Type: "gjson", Path: "prompt_cache_key"},
+				{Type: "request_header", Key: "Session_id"},
+			},
+			SkipRetryOnFailure: false,
+			IncludeUsingGroup:  true,
+			IncludeRuleName:    true,
+		},
+	}
+
+	const sessionID = "configured-session-fallback"
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-astra"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request.Header.Set("Session_id", sessionID)
+
+	preferredID, found := GetPreferredChannelByAffinity(ctx, "gpt-6-astra", "default")
+	assert.False(t, found)
+	assert.Zero(t, preferredID)
+
+	meta, ok := getChannelAffinityMeta(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "codex cli trace", meta.RuleName)
+	assert.Equal(t, sessionID, meta.KeyValue)
+	assert.False(t, meta.SkipRetry)
+	t.Cleanup(func() {
+		cache := getChannelAffinityCache()
+		_, _ = cache.DeleteMany([]string{strings.TrimPrefix(meta.CacheKey, channelAffinityCacheNamespace+":")})
+	})
+
+	RecordChannelAffinity(ctx, channelID)
+
+	preferredID, found = GetPreferredChannelByAffinity(ctx, "gpt-6-astra", "default")
+	assert.True(t, found)
+	assert.Equal(t, channelID, preferredID)
+}
+
+func TestGetPreferredChannelByAffinity_DoesNotBypassConfiguredRules(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+	originalSetting := *setting
+	setting.Enabled = true
+	t.Cleanup(func() {
+		*setting = originalSetting
+	})
+
+	tests := []struct {
+		name      string
+		rules     []operation_setting.ChannelAffinityRule
+		modelName string
+		path      string
+		userAgent string
+		sessionID string
+	}{
+		{
+			name: "excluded user agent",
+			rules: []operation_setting.ChannelAffinityRule{{
+				Name:             "restricted codex",
+				ModelRegex:       []string{"^gpt-.*$"},
+				PathRegex:        []string{"^/v1/responses$"},
+				UserAgentInclude: []string{"allowed-client"},
+				KeySources:       []operation_setting.ChannelAffinityKeySource{{Type: "request_header", Key: "Session_id"}},
+			}},
+			modelName: "gpt-5.4",
+			path:      "/v1/responses",
+			userAgent: "excluded-client",
+			sessionID: "session-excluded-user-agent",
+		},
+		{
+			name: "excluded model",
+			rules: []operation_setting.ChannelAffinityRule{{
+				Name:       "restricted codex",
+				ModelRegex: []string{"^gpt-5\\.4$"},
+				PathRegex:  []string{"^/v1/responses$"},
+				KeySources: []operation_setting.ChannelAffinityKeySource{{Type: "request_header", Key: "Session_id"}},
+			}},
+			modelName: "gpt-6",
+			path:      "/v1/responses",
+			sessionID: "session-excluded-model",
+		},
+		{
+			name: "excluded path",
+			rules: []operation_setting.ChannelAffinityRule{{
+				Name:       "restricted codex",
+				ModelRegex: []string{"^gpt-.*$"},
+				PathRegex:  []string{"^/v1/responses/compact$"},
+				KeySources: []operation_setting.ChannelAffinityKeySource{{Type: "request_header", Key: "Session_id"}},
+			}},
+			modelName: "gpt-5.4",
+			path:      "/v1/responses",
+			sessionID: "session-excluded-path",
+		},
+		{
+			name: "excluded value",
+			rules: []operation_setting.ChannelAffinityRule{{
+				Name:       "restricted codex",
+				ModelRegex: []string{"^gpt-.*$"},
+				PathRegex:  []string{"^/v1/responses$"},
+				KeySources: []operation_setting.ChannelAffinityKeySource{{Type: "request_header", Key: "Session_id"}},
+				ValueRegex: "^allowed-",
+			}},
+			modelName: "gpt-5.4",
+			path:      "/v1/responses",
+			sessionID: "session-excluded-value",
+		},
+		{
+			name:      "removed rules",
+			rules:     nil,
+			modelName: "gpt-5.4",
+			path:      "/v1/responses",
+			sessionID: "session-removed-rules",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setting.Rules = tt.rules
+			rec := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(rec)
+			t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
+			ctx.Request = httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(`{"model":"gpt-5.4"}`))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			ctx.Request.Header.Set("User-Agent", tt.userAgent)
+			ctx.Request.Header.Set("Session_id", tt.sessionID)
+
+			preferredID, found := GetPreferredChannelByAffinity(ctx, tt.modelName, "default")
+			assert.False(t, found)
+			assert.Zero(t, preferredID)
+			_, ok := getChannelAffinityMeta(ctx)
+			assert.False(t, ok)
+		})
+	}
+}
+
+func TestGetPreferredChannelByAffinity_DefaultCodexRulePrefersStableSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+	originalSetting := *setting
+	setting.Enabled = true
+	setting.InvalidateStaleCacheEnabled = false
+	t.Cleanup(func() {
+		*setting = originalSetting
+	})
+
+	const (
+		channelID = 9531
+		sessionID = "stable-session-with-optional-prompt"
+	)
+	firstRec := httptest.NewRecorder()
+	firstCtx, _ := gin.CreateTestContext(firstRec)
+	t.Cleanup(func() { common.CleanupBodyStorage(firstCtx) })
+	firstCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","prompt_cache_key":"optional-prompt"}`))
+	firstCtx.Request.Header.Set("Content-Type", "application/json")
+	firstCtx.Request.Header.Set("Session_id", sessionID)
+
+	preferredID, found := GetPreferredChannelByAffinity(firstCtx, "gpt-5.4", "default")
+	assert.False(t, found)
+	assert.Zero(t, preferredID)
+	firstMeta, ok := getChannelAffinityMeta(firstCtx)
+	require.True(t, ok)
+	assert.Equal(t, sessionID, firstMeta.KeyValue)
+	RecordChannelAffinity(firstCtx, channelID)
+	t.Cleanup(func() {
+		cache := getChannelAffinityCache()
+		_, _ = cache.DeleteMany([]string{strings.TrimPrefix(firstMeta.CacheKey, channelAffinityCacheNamespace+":")})
+	})
+
+	secondRec := httptest.NewRecorder()
+	secondCtx, _ := gin.CreateTestContext(secondRec)
+	t.Cleanup(func() { common.CleanupBodyStorage(secondCtx) })
+	secondCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
+	secondCtx.Request.Header.Set("Content-Type", "application/json")
+	secondCtx.Request.Header.Set("Session_id", sessionID)
+
+	preferredID, found = GetPreferredChannelByAffinity(secondCtx, "gpt-5.4", "default")
+	assert.True(t, found)
+	assert.Equal(t, channelID, preferredID)
+	secondMeta, ok := getChannelAffinityMeta(secondCtx)
+	require.True(t, ok)
+	assert.Equal(t, firstMeta.CacheKey, secondMeta.CacheKey)
+}
+
+func TestGetPreferredChannelByAffinity_ConfiguredPromptOnlyRuleRemainsAuthoritative(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+	originalSetting := *setting
+	setting.Enabled = true
+	setting.Rules = []operation_setting.ChannelAffinityRule{{
+		Name:       "legacy prompt-only rule",
+		ModelRegex: []string{"^gpt-5\\.4$"},
+		PathRegex:  []string{"^/v1/responses$"},
+		KeySources: []operation_setting.ChannelAffinityKeySource{{Type: "gjson", Path: "prompt_cache_key"}},
+	}}
+	t.Cleanup(func() {
+		*setting = originalSetting
+	})
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","prompt_cache_key":"prompt-only-client"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	preferredID, found := GetPreferredChannelByAffinity(ctx, "gpt-5.4", "default")
+	assert.False(t, found)
+	assert.Zero(t, preferredID)
+	meta, ok := getChannelAffinityMeta(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "legacy prompt-only rule", meta.RuleName)
+	assert.Equal(t, "prompt-only-client", meta.KeyValue)
+	assert.Equal(t, "gjson", meta.KeySourceType)
+	assert.Equal(t, "prompt_cache_key", meta.KeySourcePath)
+}
+
+func TestGetPreferredChannelByAffinity_DefaultCodexRuleUsesPromptButNotReasoningItemID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+	originalSetting := *setting
+	setting.Enabled = true
+	t.Cleanup(func() {
+		*setting = originalSetting
+	})
+
+	tests := []struct {
+		name         string
+		body         string
+		wantMeta     bool
+		wantKeyValue string
+	}{
+		{
+			name:         "prompt-only client",
+			body:         `{"model":"gpt-5.4","prompt_cache_key":"default-prompt-only-client"}`,
+			wantMeta:     true,
+			wantKeyValue: "default-prompt-only-client",
+		},
+		{
+			name: "reasoning item ID is not an affinity source",
+			body: `{"model":"gpt-5.4","input":[{"type":"reasoning","id":"reasoning-item-id"}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(rec)
+			t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(tt.body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+
+			preferredID, found := GetPreferredChannelByAffinity(ctx, "gpt-5.4", "default")
+			assert.False(t, found)
+			assert.Zero(t, preferredID)
+			meta, ok := getChannelAffinityMeta(ctx)
+			assert.Equal(t, tt.wantMeta, ok)
+			if tt.wantMeta {
+				assert.Equal(t, tt.wantKeyValue, meta.KeyValue)
+				assert.Equal(t, "prompt_cache_key", meta.KeySourcePath)
+			}
+		})
+	}
 }
