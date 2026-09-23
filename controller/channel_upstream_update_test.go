@@ -511,6 +511,7 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithModelMapping(t *testin
 		[]string{"alias-model", "gpt-4o", "stale-model"},
 		[]string{"gpt-4o", "gpt-4.1", "mapped-target"},
 		[]string{"gpt-4.1"},
+		nil,
 		map[string]string{
 			"alias-model": "mapped-target",
 		},
@@ -526,10 +527,92 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithIgnoredRegexPatterns(t
 		[]string{"gpt-4o", "claude-3-5-sonnet", "sora-video", "gpt-4.1"},
 		[]string{"regex:^sora-.*$", "gpt-4.1"},
 		nil,
+		nil,
 	)
 
 	require.Equal(t, []string{"claude-3-5-sonnet"}, pendingAddModels)
 	require.Equal(t, []string{}, pendingRemoveModels)
+}
+
+func TestCollectPendingUpstreamModelChangesFromModels_WithIncludePatterns(t *testing.T) {
+	pendingAddModels, pendingRemoveModels := collectPendingUpstreamModelChangesFromModels(
+		[]string{"nvidia/nemotron-3-nano-30b-a3b:free", "openai/gpt-5.4", "google/gemma-4-26b-a4b-it:free"},
+		[]string{
+			"nvidia/nemotron-3.5-lightning:free",
+			"google/gemma-4-26b-a4b-it:free",
+			"openai/gpt-5.4",
+			"deepseek/deepseek-v4-flash",
+			"openrouter/free",
+		},
+		nil,
+		[]string{":free", "openrouter/free"},
+		nil,
+	)
+
+	require.Equal(t, []string{"nvidia/nemotron-3.5-lightning:free", "openrouter/free"}, pendingAddModels)
+	require.Equal(t, []string{"nvidia/nemotron-3-nano-30b-a3b:free", "openai/gpt-5.4"}, pendingRemoveModels)
+}
+
+func TestMatchIncludePatternVariants(t *testing.T) {
+	require.True(t, matchIncludePattern("nvidia/nemotron-3.5-lightning:free", ":free"))
+	require.True(t, matchIncludePattern("deepseek/deepseek-v4-flash", "deepseek/"))
+	require.True(t, matchIncludePattern("deepseek/deepseek-v4-flash", "prefix:deepseek/"))
+	require.True(t, matchIncludePattern("google/gemma-4-26b-a4b-it:free", "suffix::free"))
+	require.True(t, matchIncludePattern("openrouter/free", "openrouter/free"))
+	require.True(t, matchIncludePattern("moonshotai/kimi-k3", "regex:^moonshotai/"))
+	require.False(t, matchIncludePattern("openai/gpt-5.4", ":free"))
+	require.False(t, matchIncludePattern("openai/gpt-5.4", "regex:["))
+	require.True(t, modelMatchesIncludePatterns("openai/gpt-5.4", nil))
+}
+
+func TestCollectPendingUpstreamModelChangesFromModels_WithPrefixInclude(t *testing.T) {
+	pendingAddModels, pendingRemoveModels := collectPendingUpstreamModelChangesFromModels(
+		[]string{"deepseek/deepseek-v4-flash", "openai/gpt-5.4"},
+		[]string{"deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro", "openai/gpt-5.4"},
+		nil,
+		[]string{"deepseek/"},
+		nil,
+	)
+
+	require.Equal(t, []string{"deepseek/deepseek-v4-pro"}, pendingAddModels)
+	require.Equal(t, []string{"openai/gpt-5.4"}, pendingRemoveModels)
+}
+
+func TestAutoSyncAppliesIncludeFilterAndRemovals(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"nvidia/nemotron-3.5-lightning:free"},{"id":"openai/gpt-5.4"}]}`))
+	}))
+	defer server.Close()
+
+	baseURL := server.URL
+	channel := &model.Channel{
+		Type:    constant.ChannelTypeOpenAI,
+		Key:     "sk-test",
+		BaseURL: &baseURL,
+		Models:  "nvidia/nemotron-3-nano-30b-a3b:free,google/gemma-4-26b-a4b-it:free",
+		Status:  common.ChannelStatusEnabled,
+	}
+	settings := dto.ChannelOtherSettings{
+		UpstreamModelUpdateCheckEnabled:    true,
+		UpstreamModelUpdateAutoSyncEnabled: true,
+		UpstreamModelUpdateIncludePatterns: []string{":free"},
+	}
+	channel.SetOtherSettings(settings)
+	require.NoError(t, db.Create(channel).Error)
+
+	modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, true)
+	require.NoError(t, err)
+	require.True(t, modelsChanged)
+	require.Equal(t, 1, autoAdded)
+
+	reloaded, err := model.GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	require.Equal(t, "nvidia/nemotron-3.5-lightning:free", reloaded.Models)
+	persisted := reloaded.GetOtherSettings()
+	require.Empty(t, persisted.UpstreamModelUpdateLastDetectedModels)
+	require.Empty(t, persisted.UpstreamModelUpdateLastRemovedModels)
 }
 
 func TestBuildUpstreamModelUpdateTaskNotificationContent_OmitOverflowDetails(t *testing.T) {

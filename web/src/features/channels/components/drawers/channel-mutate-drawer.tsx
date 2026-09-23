@@ -315,6 +315,7 @@ const SENSITIVE_FORM_FIELDS = [
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
   'upstream_model_update_ignored_models',
+  'upstream_model_update_include_patterns',
 ] satisfies (keyof ChannelFormValues)[]
 
 function parseSettingsRecord(
@@ -2348,6 +2349,27 @@ export function ChannelMutateDrawer({
               <FormDescription>
                 {t(
                   'Comma-separated exact model names. Prefix with regex: to ignore by regular expression.'
+                )}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name='upstream_model_update_include_patterns'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Include upstream models')}</FormLabel>
+              <FormControl>
+                <Input
+                  placeholder={t('e.g., :free,deepseek/,openrouter/free')}
+                  {...field}
+                />
+              </FormControl>
+              <FormDescription>
+                {t(
+                  'Comma-separated include rules. Use :free for suffix, vendor/ for prefix, regex:/prefix:/suffix:, or exact IDs. Empty means all models.'
                 )}
               </FormDescription>
               <FormMessage />

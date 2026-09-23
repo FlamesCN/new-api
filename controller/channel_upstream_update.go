@@ -177,15 +177,62 @@ func normalizeChannelModelMapping(channel *model.Channel) map[string]string {
 	return normalized
 }
 
+func modelMatchesIncludePatterns(modelName string, patterns []string) bool {
+	normalized := normalizeModelNames(patterns)
+	if len(normalized) == 0 {
+		return true
+	}
+	for _, pattern := range normalized {
+		if matchIncludePattern(modelName, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchIncludePattern(modelName, pattern string) bool {
+	if regexBody, ok := strings.CutPrefix(pattern, "regex:"); ok {
+		matched, err := regexp.MatchString(strings.TrimSpace(regexBody), modelName)
+		return err == nil && matched
+	}
+	if prefix, ok := strings.CutPrefix(pattern, "prefix:"); ok {
+		return strings.HasPrefix(modelName, strings.TrimSpace(prefix))
+	}
+	if suffix, ok := strings.CutPrefix(pattern, "suffix:"); ok {
+		return strings.HasSuffix(modelName, strings.TrimSpace(suffix))
+	}
+	if strings.HasPrefix(pattern, ":") {
+		return strings.HasSuffix(modelName, pattern)
+	}
+	if strings.HasSuffix(pattern, "/") {
+		return strings.HasPrefix(modelName, pattern)
+	}
+	return modelName == pattern
+}
+
+func filterModelsByIncludePatterns(models []string, patterns []string) []string {
+	if len(normalizeModelNames(patterns)) == 0 {
+		return normalizeModelNames(models)
+	}
+	filtered := make([]string, 0, len(models))
+	for _, modelName := range normalizeModelNames(models) {
+		if modelMatchesIncludePatterns(modelName, patterns) {
+			filtered = append(filtered, modelName)
+		}
+	}
+	return filtered
+}
+
 func collectPendingUpstreamModelChangesFromModels(
 	localModels []string,
 	upstreamModels []string,
 	ignoredModels []string,
+	includePatterns []string,
 	modelMapping map[string]string,
 ) (pendingAddModels []string, pendingRemoveModels []string) {
 	localSet := make(map[string]struct{})
 	localModels = normalizeModelNames(localModels)
-	upstreamModels = normalizeModelNames(upstreamModels)
+	upstreamModels = filterModelsByIncludePatterns(upstreamModels, includePatterns)
 	for _, modelName := range localModels {
 		localSet[modelName] = struct{}{}
 	}
@@ -247,6 +294,7 @@ func collectPendingUpstreamModelChanges(channel *model.Channel, settings dto.Cha
 		channel.GetModels(),
 		upstreamModels,
 		settings.UpstreamModelUpdateIgnoredModels,
+		settings.UpstreamModelUpdateIncludePatterns,
 		normalizeChannelModelMapping(channel),
 	)
 	return pendingAddModels, pendingRemoveModels, nil
@@ -534,19 +582,21 @@ func checkAndPersistChannelUpstreamModelUpdates(
 		return false, 0, fetchErr
 	}
 
-	if allowAutoApply && settings.UpstreamModelUpdateAutoSyncEnabled && len(pendingAddModels) > 0 {
+	if allowAutoApply && settings.UpstreamModelUpdateAutoSyncEnabled &&
+		(len(pendingAddModels) > 0 || len(pendingRemoveModels) > 0) {
 		originModels := normalizeModelNames(channel.GetModels())
-		mergedModels := mergeModelNames(originModels, pendingAddModels)
-		if len(mergedModels) > len(originModels) {
-			channel.Models = strings.Join(mergedModels, ",")
-			autoAdded = len(mergedModels) - len(originModels)
+		nextModels := applySelectedModelChanges(originModels, pendingAddModels, pendingRemoveModels)
+		if !slices.Equal(originModels, nextModels) {
+			channel.Models = strings.Join(nextModels, ",")
+			autoAdded = len(subtractModelNames(nextModels, originModels))
 			modelsChanged = true
 		}
 		settings.UpstreamModelUpdateLastDetectedModels = []string{}
+		settings.UpstreamModelUpdateLastRemovedModels = []string{}
 	} else {
 		settings.UpstreamModelUpdateLastDetectedModels = pendingAddModels
+		settings.UpstreamModelUpdateLastRemovedModels = pendingRemoveModels
 	}
-	settings.UpstreamModelUpdateLastRemovedModels = pendingRemoveModels
 
 	if err = updateChannelUpstreamModelSettings(channel, *settings, modelsChanged); err != nil {
 		return false, autoAdded, err
